@@ -1,0 +1,68 @@
+services:
+  ssh-web:
+    build:
+      context: .
+    image: ssh-web:local
+    container_name: ssh-web
+    restart: unless-stopped
+
+    # SSH_WEB_BIND selects the interface it is published on. Loopback only by
+    # default. Set it to your LAN address in the .env file to reach it from
+    # other machines, bearing in mind that without TLS the traffic (sign-in
+    # password, session cookie and everything typed into the terminal) travels
+    # in the clear across that network.
+    ports:
+      - "${SSH_WEB_BIND:-127.0.0.1}:3030:3030"
+      # The server loopback: used by VS Code port forwarding, SSH tunnels and
+      # local testing with curl.
+      - "127.0.0.1:3030:3030"
+
+    environment:
+      NODE_ENV: production
+      PORT: "3030"
+      SSH_WEB_DB_PATH: /data/ssh-web.db
+      SSH_WEB_CONFIG_DIR: /data
+      SSH_WEB_SSH_DIR: /ssh
+      SSH_WEB_KEYS_DIR: /ssh-keys
+      SSH_WEB_VAULT_PATH: /data/credenciales.vault
+      # Boundary for the paths the user may choose in the settings screen.
+      SSH_WEB_ALLOWED_ROOTS: /data:/ssh:/ssh-keys
+      SSH_WEB_IN_CONTAINER: "true"
+      # Ponlo en "true" cuando sirvas por HTTPS.
+      SSH_WEB_SECURE_COOKIES: "false"
+      SSH_WEB_SESSION_IDLE_MINUTES: "120"
+      SSH_WEB_REPLAY_BUFFER_KB: "256"
+      SSH_WEB_LOG_LEVEL: info
+
+    volumes:
+      # Sessions and audit only: the application stores no secrets.
+      - ./data:/data
+
+      # Standard OpenSSH files. The application writes the Host blocks you
+      # create and any new fingerprints here, exactly as the ssh client does.
+      # Point it at ~/.ssh to use your real configuration.
+      - ${SSH_WEB_SSH_DIR_HOST:-./ssh}:/ssh
+
+      # Private keys, read-only and in a separate directory: a flaw in the
+      # application cannot reach keys that are not here.
+      - ${SSH_WEB_KEYS_DIR_HOST:-./ssh-keys}:/ssh-keys:ro
+
+    # Hardening: no writes to the root filesystem, no new privileges, no
+    # kernel capabilities. Only /data and the tmpfs mounts are writable.
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+      - /app/.next/cache:size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+    mem_limit: 512m
+    pids_limit: 256
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

@@ -1,0 +1,172 @@
+@import 'tailwindcss';
+
+@theme {
+  --color-void: #04060a;
+  --color-abyss: #070b11;
+  --color-panel: #0b1119;
+  --color-panel-raised: #0f1721;
+  --color-hairline: #1b2733;
+  --color-hairline-bright: #2a3b4d;
+
+  --color-ink: #e6f1f7;
+  --color-ink-dim: #8fa3b3;
+  --color-ink-faint: #5a6b7a;
+
+  --color-cyan: #22d3ee;
+  --color-cyan-deep: #0e7490;
+  --color-violet: #a78bfa;
+  --color-lime: #34d399;
+  --color-amber: #fbbf24;
+  --color-rose: #fb7185;
+
+  --font-mono:
+    ui-monospace, 'JetBrains Mono', 'SFMono-Regular', 'Cascadia Mono', Menlo, Consolas, monospace;
+
+  --radius-panel: 2px;
+}
+
+@layer base {
+  * {
+    border-color: var(--color-hairline);
+  }
+
+  html {
+    color-scheme: dark;
+  }
+
+  body {
+    background-color: var(--color-void);
+    color: var(--color-ink);
+    font-family: var(--font-mono);
+    font-size: 13px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    letter-spacing: 0.01em;
+  }
+
+  /* Technical background grid: adds depth without competing with content. */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    z-index: -2;
+    background-image:
+      linear-gradient(to right, color-mix(in oklab, var(--color-cyan) 6%, transparent) 1px, transparent 1px),
+      linear-gradient(to bottom, color-mix(in oklab, var(--color-cyan) 6%, transparent) 1px, transparent 1px);
+    background-size: 48px 48px;
+    mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, black 20%, transparent 75%);
+  }
+
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    background:
+      radial-gradient(ellipse 60% 40% at 15% -10%, color-mix(in oklab, var(--color-cyan) 12%, transparent), transparent),
+      radial-gradient(ellipse 50% 40% at 90% 0%, color-mix(in oklab, var(--color-violet) 10%, transparent), transparent);
+    pointer-events: none;
+  }
+
+  ::selection {
+    background: color-mix(in oklab, var(--color-cyan) 30%, transparent);
+  }
+
+  *:focus-visible {
+    outline: 1px solid var(--color-cyan);
+    outline-offset: 2px;
+  }
+
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: var(--color-abyss);
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-hairline-bright);
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--color-cyan-deep);
+  }
+}
+
+@utility label-tech {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--color-ink-faint);
+}
+
+/* Bracket corners: the visual device that gives the technical-instrument feel. */
+@utility bracket-frame {
+  position: relative;
+  &::before,
+  &::after {
+    content: '';
+    position: absolute;
+    width: 10px;
+    height: 10px;
+    border-color: var(--color-cyan);
+    opacity: 0.55;
+  }
+  &::before {
+    top: -1px;
+    left: -1px;
+    border-top-width: 1px;
+    border-left-width: 1px;
+  }
+  &::after {
+    bottom: -1px;
+    right: -1px;
+    border-bottom-width: 1px;
+    border-right-width: 1px;
+  }
+}
+
+@utility glow-cyan {
+  box-shadow:
+    0 0 0 1px color-mix(in oklab, var(--color-cyan) 25%, transparent),
+    0 0 24px -6px color-mix(in oklab, var(--color-cyan) 40%, transparent);
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+
+@utility live-dot {
+  animation: pulse-dot 1.8s ease-in-out infinite;
+}
+
+@keyframes sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@utility scan-line {
+  position: relative;
+  overflow: hidden;
+  &::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      color-mix(in oklab, var(--color-cyan) 22%, transparent),
+      transparent
+    );
+    animation: sweep 1.6s linear infinite;
+  }
+}
