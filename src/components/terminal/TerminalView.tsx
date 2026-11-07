@@ -2,12 +2,23 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import '@xterm/xterm/css/xterm.css'
-import type { Terminal } from '@xterm/xterm'
-import type { FitAddon } from '@xterm/addon-fit'
 import { useTerminalSocket, type LinkState } from '@/hooks/useTerminalSocket'
+import { useXterm } from '@/hooks/useXterm'
+import { useCoarsePointer, useVisibleArea } from '@/hooks/useViewport'
 import { TerminalWriteQueue } from '@/client/write-queue'
+import { copyText, readClipboard } from '@/client/clipboard'
+import { bufferToText } from '@/client/terminal-text'
+import {
+  applyModifiers,
+  clampViewport,
+  specialKeySequence,
+  type Modifiers,
+  type SpecialKey,
+} from '@/client/terminal-keys'
 import { Badge, Button, Dot } from '@/components/ui/primitives'
 import { Brand } from '@/components/ui/Brand'
+import { MobileKeyBar } from '@/components/terminal/MobileKeyBar'
+import { PasteSheet, SelectSheet } from '@/components/terminal/TextSheet'
 
 const LINK: Record<LinkState, { readonly tone: 'lime' | 'cyan' | 'amber' | 'neutral' | 'rose'; readonly text: string }> = {
   connecting: { tone: 'cyan', text: 'linking' },
@@ -17,29 +28,12 @@ const LINK: Record<LinkState, { readonly tone: 'lime' | 'cyan' | 'amber' | 'neut
   error: { tone: 'rose', text: 'error' },
 }
 
-const THEME = {
-  background: '#04060a',
-  foreground: '#e6f1f7',
-  cursor: '#22d3ee',
-  cursorAccent: '#04060a',
-  selectionBackground: '#0e7490',
-  black: '#0b1119',
-  red: '#fb7185',
-  green: '#34d399',
-  yellow: '#fbbf24',
-  blue: '#38bdf8',
-  magenta: '#a78bfa',
-  cyan: '#22d3ee',
-  white: '#cbd5e1',
-  brightBlack: '#5a6b7a',
-  brightRed: '#fda4af',
-  brightGreen: '#6ee7b7',
-  brightYellow: '#fcd34d',
-  brightBlue: '#7dd3fc',
-  brightMagenta: '#c4b5fd',
-  brightCyan: '#67e8f9',
-  brightWhite: '#f1f5f9',
-} as const
+const NO_MODIFIERS: Modifiers = { ctrl: false, alt: false }
+const FLASH_MS = 1800
+// Enough to cover the scrollback without building a huge DOM node.
+const SELECT_MAX_LINES = 5000
+
+type Sheet = { readonly kind: 'select'; readonly text: string } | { readonly kind: 'paste' } | null
 
 export function TerminalView({
   sessionId,
@@ -51,98 +45,194 @@ export function TerminalView({
   readonly onExit: () => void
 }) {
   const hostRef = useRef<HTMLDivElement>(null)
-  const termRef = useRef<Terminal | null>(null)
-  const fitRef = useRef<FitAddon | null>(null)
   const decoder = useRef(new TextDecoder())
-  const queueRef = useRef<TerminalWriteQueue | null>(null)
-  if (queueRef.current === null) queueRef.current = new TerminalWriteQueue()
+  const [queue] = useState(() => new TerminalWriteQueue())
   const [notice, setNotice] = useState<string | null>(null)
+  const [flash, setFlash] = useState<string | null>(null)
+  const [sheet, setSheet] = useState<Sheet>(null)
+  const [modifiers, setModifiers] = useState<Modifiers>(NO_MODIFIERS)
+  const modifiersRef = useRef<Modifiers>(NO_MODIFIERS)
+  // True while terminal.paste() runs: pasted text must not consume a modifier.
+  const pastingRef = useRef(false)
+  const coarse = useCoarsePointer()
+  const visible = useVisibleArea()
 
   // The server sends the history as soon as the WebSocket connects, and xterm
   // is loaded with a dynamic import(). Without the queue, the first time round
   // (cold cache) the history arrives before the terminal and is lost.
-  const onOutput = useCallback((chunk: Uint8Array) => {
-    queueRef.current?.push(decoder.current.decode(chunk, { stream: true }))
-  }, [])
-
+  const onOutput = useCallback(
+    (chunk: Uint8Array) => queue.push(decoder.current.decode(chunk, { stream: true })),
+    [queue],
+  )
   const onNotice = useCallback((message: string) => setNotice(message), [])
 
   const link = useTerminalSocket({ sessionId, onOutput, onNotice })
-  const { send, resize } = link
+  const { send, resize, state } = link
 
+  const updateModifiers = useCallback((next: Modifiers) => {
+    modifiersRef.current = next
+    setModifiers(next)
+  }, [])
+
+  const showFlash = useCallback((message: string) => setFlash(message), [])
   useEffect(() => {
-    let disposed = false
-    let terminal: Terminal | null = null
-    let observer: ResizeObserver | null = null
+    if (!flash) return
+    const timer = setTimeout(() => setFlash(null), FLASH_MS)
+    return () => clearTimeout(timer)
+  }, [flash])
 
-    async function boot(): Promise<void> {
-      const [{ Terminal: Ctor }, { FitAddon: Fit }, { WebLinksAddon }] = await Promise.all([
-        import('@xterm/xterm'),
-        import('@xterm/addon-fit'),
-        import('@xterm/addon-web-links'),
-      ])
-      if (disposed || !hostRef.current) return
+  const reportSize = useCallback(
+    (cols: number, rows: number) => {
+      const size = clampViewport(cols, rows)
+      if (size) resize(size.cols, size.rows)
+    },
+    [resize],
+  )
 
-      terminal = new Ctor({
-        theme: THEME,
-        fontFamily:
-          "ui-monospace, 'JetBrains Mono', 'SFMono-Regular', 'Cascadia Mono', Menlo, monospace",
-        fontSize: 13,
-        lineHeight: 1.3,
-        cursorBlink: true,
-        cursorStyle: 'bar',
-        scrollback: 5000,
-        allowProposedApi: true,
-      })
+  const onData = useCallback(
+    (data: string) => {
+      const armed = modifiersRef.current
+      // xterm also emits its own replies (device attributes, cursor reports,
+      // focus events) through onData; they all start with ESC and must not
+      // consume an armed modifier.
+      const typed = !pastingRef.current && !data.startsWith('\x1b')
+      if (typed && (armed.ctrl || armed.alt)) {
+        updateModifiers(NO_MODIFIERS)
+        send(applyModifiers(data, armed))
+        return
+      }
+      send(data)
+    },
+    [send, updateModifiers],
+  )
 
-      const fit = new Fit()
-      terminal.loadAddon(fit)
-      terminal.loadAddon(new WebLinksAddon())
-      terminal.open(hostRef.current)
-      fit.fit()
+  const termRef = useXterm({
+    hostRef,
+    queue,
+    onData,
+    onResize: reportSize,
+    onCopied: (ok) => showFlash(ok ? 'Copied' : 'The browser blocked the clipboard'),
+  })
 
-      termRef.current = terminal
-      fitRef.current = fit
-      terminal.focus()
+  // The first size is measured before the WebSocket is open, and messages
+  // sent before that are dropped: report it again as soon as the link is up.
+  // This is what fixes a new terminal stuck at the placeholder size.
+  useEffect(() => {
+    if (state !== 'online') return
+    const terminal = termRef.current
+    if (terminal) reportSize(terminal.cols, terminal.rows)
+  }, [state, reportSize, termRef])
 
-      // The terminal exists now: flush what was held, then write directly.
-      const target = terminal
-      queueRef.current?.attach((data) => target.write(data))
+  const focusTerminal = useCallback(() => termRef.current?.focus(), [termRef])
 
-      terminal.onData((data) => send(data))
-      terminal.onResize(({ cols, rows }) => resize(cols, rows))
+  // Sheets need the on-screen keyboard closed: it would cover the text and
+  // keep typing going to the terminal behind the dialog.
+  const openSheet = useCallback(
+    (next: NonNullable<Sheet>) => {
+      termRef.current?.blur()
+      setSheet(next)
+    },
+    [termRef],
+  )
 
-      observer = new ResizeObserver(() => fitRef.current?.fit())
-      observer.observe(hostRef.current)
+  const pasteIntoTerminal = useCallback(
+    (text: string) => {
+      const terminal = termRef.current
+      if (!terminal || text.length === 0) return
+      pastingRef.current = true
+      try {
+        terminal.paste(text)
+      } finally {
+        pastingRef.current = false
+      }
+    },
+    [termRef],
+  )
+
+  const copy = useCallback(
+    async (text: string) => {
+      const ok = await copyText(text)
+      showFlash(ok ? 'Copied' : 'The browser blocked the clipboard')
+    },
+    [showFlash],
+  )
+
+  const copySelectionOrOpen = useCallback(() => {
+    const terminal = termRef.current
+    if (!terminal) return
+    const selected = terminal.getSelection()
+    if (selected.length > 0) {
+      void copy(selected)
+      terminal.clearSelection()
+      return
     }
+    openSheet({ kind: 'select', text: bufferToText(terminal.buffer.active, SELECT_MAX_LINES) })
+  }, [copy, openSheet, termRef])
 
-    void boot()
+  const openSelect = useCallback(() => {
+    const terminal = termRef.current
+    if (terminal) openSheet({ kind: 'select', text: bufferToText(terminal.buffer.active, SELECT_MAX_LINES) })
+  }, [openSheet, termRef])
 
-    return () => {
-      disposed = true
-      observer?.disconnect()
-      queueRef.current?.detach()
-      terminal?.dispose()
-      termRef.current = null
-      fitRef.current = null
+  const paste = useCallback(async () => {
+    const text = await readClipboard()
+    if (text === null) {
+      openSheet({ kind: 'paste' })
+      return
     }
-  }, [send, resize])
+    pasteIntoTerminal(text)
+    focusTerminal()
+  }, [focusTerminal, openSheet, pasteIntoTerminal])
 
-  const status = LINK[link.state]
-  const finished = link.state === 'closed' || link.state === 'error'
+  const pressSpecial = useCallback(
+    (key: SpecialKey) => {
+      const applicationCursor = termRef.current?.modes.applicationCursorKeysMode ?? false
+      const sequence = specialKeySequence(key, applicationCursor)
+      const armed = modifiersRef.current
+      // Alt+arrow is ESC-prefixed by most terminals; Ctrl only applies to text.
+      send(armed.alt ? `\x1b${sequence}` : sequence)
+      if (armed.ctrl || armed.alt) updateModifiers(NO_MODIFIERS)
+      focusTerminal()
+    },
+    [focusTerminal, send, termRef, updateModifiers],
+  )
+
+  const closeSheet = useCallback(() => {
+    setSheet(null)
+    focusTerminal()
+  }, [focusTerminal])
+
+  const status = LINK[state]
+  const finished = state === 'closed' || state === 'error'
 
   return (
-    <div className="flex h-screen flex-col">
-      <header className="flex flex-wrap items-center gap-3 border-b border-hairline bg-panel/80 px-4 py-2 backdrop-blur-sm">
-        <Brand />
-        <span className="truncate text-ink">{title}</span>
+    <div
+      className="fixed inset-x-0 top-0 flex h-dvh flex-col"
+      style={visible ? { height: visible.height, transform: `translateY(${visible.offsetTop}px)` } : undefined}
+    >
+      <header className="flex flex-wrap items-center gap-2 border-b border-hairline bg-panel/80 px-3 py-2 pt-[max(0.5rem,env(safe-area-inset-top))] backdrop-blur-sm sm:gap-3 sm:px-4">
+        <span className="hidden sm:block">
+          <Brand />
+        </span>
+        <span className="min-w-0 truncate text-ink">{title}</span>
         <Badge tone={status.tone}>
-          <Dot tone={status.tone} live={link.state === 'online'} />
+          <Dot tone={status.tone} live={state === 'online'} />
           {status.text}
         </Badge>
+        {flash ? (
+          <span role="status" className="text-[11px] text-lime">
+            {flash}
+          </span>
+        ) : null}
         <div className="ml-auto flex items-center gap-2">
+          <Button tone="neutral" className="hidden sm:inline-flex" onClick={copySelectionOrOpen} title="Ctrl+Shift+C">
+            Copy
+          </Button>
+          <Button tone="neutral" className="hidden sm:inline-flex" onClick={() => void paste()} title="Ctrl+Shift+V">
+            Paste
+          </Button>
           <Button tone="neutral" onClick={onExit}>
-            {finished ? 'Back' : 'Leave running'}
+            {finished ? 'Back' : coarse ? 'Leave' : 'Leave running'}
           </Button>
           <Button
             tone="rose"
@@ -152,24 +242,54 @@ export function TerminalView({
             }}
             disabled={finished}
           >
-            Close session
+            {coarse ? 'Close' : 'Close session'}
           </Button>
         </div>
       </header>
 
       {notice ? (
-        <p className="border-b border-hairline bg-amber/5 px-4 py-1.5 text-[11px] text-amber">
-          {notice}
-        </p>
+        <p className="border-b border-hairline bg-amber/5 px-4 py-1.5 text-[11px] text-amber">{notice}</p>
       ) : null}
 
-      {link.state === 'suspended' ? (
+      {state === 'suspended' ? (
         <p className="border-b border-hairline bg-cyan/5 px-4 py-1.5 text-[11px] text-cyan">
           Session suspended on the server. It is still alive and you can resume it.
         </p>
       ) : null}
 
-      <div ref={hostRef} className="min-h-0 flex-1 bg-void px-2 py-1" />
+      <div className="relative min-h-0 flex-1">
+        <div ref={hostRef} className="absolute inset-0 bg-void px-2 py-1" onClick={focusTerminal} />
+        {sheet?.kind === 'select' ? (
+          <SelectSheet text={sheet.text} onCopy={(text) => void copy(text)} onClose={closeSheet} />
+        ) : null}
+        {sheet?.kind === 'paste' ? (
+          <PasteSheet
+            onSend={(text) => {
+              pasteIntoTerminal(text)
+              closeSheet()
+            }}
+            onClose={closeSheet}
+          />
+        ) : null}
+      </div>
+
+      {coarse && !finished ? (
+        <MobileKeyBar
+          modifiers={modifiers}
+          onToggleModifier={(name) => {
+            updateModifiers({ ...modifiersRef.current, [name]: !modifiersRef.current[name] })
+            focusTerminal()
+          }}
+          onSpecial={pressSpecial}
+          onText={(text) => {
+            onData(text)
+            focusTerminal()
+          }}
+          onSelect={openSelect}
+          onPaste={() => void paste()}
+          onKeyboard={focusTerminal}
+        />
+      ) : null}
     </div>
   )
 }

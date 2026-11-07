@@ -162,6 +162,33 @@ And two buttons:
 Clicking **SSH WEB** at the top left also takes you back to the dashboard, and
 behaves like *Leave running*.
 
+### Copying and pasting
+
+| Action | How |
+| --- | --- |
+| Copy | Select with the mouse, then `Ctrl+Shift+C` (`Cmd+C` on macOS). `Ctrl+C` also copies **while there is a selection**; without one it is still the interrupt signal. The **Copy** button and the right-click menu work too. |
+| Paste | `Ctrl+Shift+V`, `Shift+Insert` (`Cmd+V` on macOS), or the **Paste** button. Plain `Ctrl+V` is sent to the shell. |
+| Select under tmux, vim or htop | Those programs capture the mouse: hold `Shift` while dragging (`Option` on macOS). |
+
+Copying works over plain HTTP as well. The **Paste** button needs HTTPS to
+read the clipboard; over HTTP it opens a box where you paste with the system
+menu and send it to the terminal.
+
+### On a phone or tablet
+
+On touch devices a key bar appears under the terminal with `Esc`, `Tab`,
+`Ctrl`, `Alt`, the arrows, `Home`/`End`/`PgUp`/`PgDn` and the symbols that are
+hard to reach on a phone keyboard. `Ctrl` and `Alt` are sticky: tap `Ctrl`,
+then `c` to send `Ctrl+C`.
+
+- **Select** shows the terminal output as normal text, where the system
+  selection handles work. Select and press **Copy selection**, or **Copy all**.
+- **Paste** sends the clipboard to the terminal.
+- **Kbd** brings the keyboard back if it was dismissed.
+
+The terminal shrinks to stay above the on-screen keyboard and reports the new
+size to the remote machine.
+
 ---
 
 ## Storing passwords
@@ -287,10 +314,10 @@ What does **not** change: it still needs the server to be running and
 reachable. It does not work offline, and it could not: there is a live SSH
 session at the other end.
 
-> **About mobile, frankly.** It installs and it works, but a terminal with a
-> touch keyboard is awkward: no `Ctrl`, `Esc` or arrow keys unless your
-> keyboard provides them. Fine for checking on a process you left running or
-> running something short; for real work, use a computer.
+> **About mobile, frankly.** It installs and it works, and the key bar
+> supplies `Ctrl`, `Esc` and the arrows. Still, a touch keyboard is slow:
+> fine for checking on a process you left running or running something short;
+> for real work, use a computer.
 
 ---
 

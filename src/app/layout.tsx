@@ -38,6 +38,10 @@ export const viewport: Viewport = {
   maximumScale: 1,
   userScalable: false,
   viewportFit: 'cover',
+  // Android Chrome shrinks the page when the on-screen keyboard opens, so the
+  // terminal refits above it instead of being covered. iOS ignores this; it
+  // is handled with visualViewport in the terminal view.
+  interactiveWidget: 'resizes-content',
 }
 
 export default function RootLayout({ children }: { readonly children: ReactNode }) {
