@@ -33,9 +33,10 @@ export const TERMINAL_OPTIONS: ITerminalOptions = {
   cursorStyle: 'bar',
   scrollback: 5000,
   allowProposedApi: true,
-  // Right click selects the word under the pointer, so the context menu
-  // offers "Copy" on every platform, not only on macOS.
-  rightClickSelectsWord: true,
+  // Right click keeps the current selection, so the context menu "Copy"
+  // takes all of it. Selecting the word under the pointer instead would
+  // replace a selection whenever the click lands just outside it.
+  rightClickSelectsWord: false,
   // With a program that captures the mouse (tmux, htop, vim), Alt+drag on
   // macOS and Shift+drag elsewhere still select text.
   macOptionClickForcesSelection: true,

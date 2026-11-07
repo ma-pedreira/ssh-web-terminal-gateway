@@ -6,10 +6,13 @@ import { Button } from '@/components/ui/primitives'
 function Sheet({
   title,
   onClose,
+  actions,
   children,
 }: {
   readonly title: string
   readonly onClose: () => void
+  /** Buttons of the bottom bar, placed before Close. */
+  readonly actions: ReactNode
   readonly children: ReactNode
 }) {
   return (
@@ -22,13 +25,16 @@ function Sheet({
         if (event.key === 'Escape') onClose()
       }}
     >
-      <header className="flex items-center gap-2 border-b border-hairline px-3 py-2">
+      <header className="border-b border-hairline px-3 py-2">
         <h2 className="label-tech">{title}</h2>
+      </header>
+      {children}
+      <footer className="flex flex-wrap gap-2 border-t border-hairline px-3 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+        {actions}
         <Button tone="neutral" className="ml-auto" onClick={onClose}>
           Close
         </Button>
-      </header>
-      {children}
+      </footer>
     </div>
   )
 }
@@ -60,7 +66,18 @@ export function SelectSheet({
   }
 
   return (
-    <Sheet title="Select text" onClose={onClose}>
+    <Sheet
+      title="Select text"
+      onClose={onClose}
+      actions={
+        <>
+          <Button onClick={copySelection}>Copy selection</Button>
+          <Button tone="neutral" onClick={() => onCopy(text)}>
+            Copy all
+          </Button>
+        </>
+      }
+    >
       <pre
         ref={preRef}
         className="min-h-0 flex-1 select-text overflow-auto px-3 py-2 text-[13px] leading-snug whitespace-pre text-ink"
@@ -68,12 +85,6 @@ export function SelectSheet({
       >
         {text}
       </pre>
-      <footer className="flex gap-2 border-t border-hairline px-3 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
-        <Button onClick={copySelection}>Copy selection</Button>
-        <Button tone="neutral" onClick={() => onCopy(text)}>
-          Copy all
-        </Button>
-      </footer>
     </Sheet>
   )
 }
@@ -92,7 +103,15 @@ export function PasteSheet({
   const [value, setValue] = useState('')
 
   return (
-    <Sheet title="Paste" onClose={onClose}>
+    <Sheet
+      title="Paste"
+      onClose={onClose}
+      actions={
+        <Button disabled={value.length === 0} onClick={() => onSend(value)}>
+          Send to terminal
+        </Button>
+      }
+    >
       <div className="flex min-h-0 flex-1 flex-col gap-2 p-3">
         <p className="text-[11px] text-ink-dim">
           This browser does not let the page read the clipboard. Paste here and send it to the terminal.
@@ -106,9 +125,6 @@ export function PasteSheet({
           spellCheck={false}
           className="min-h-0 flex-1 resize-none border border-hairline bg-panel p-2 text-base text-ink outline-none focus:border-cyan"
         />
-        <Button disabled={value.length === 0} onClick={() => onSend(value)}>
-          Send to terminal
-        </Button>
       </div>
     </Sheet>
   )

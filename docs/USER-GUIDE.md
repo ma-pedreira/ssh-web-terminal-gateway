@@ -166,7 +166,7 @@ behaves like *Leave running*.
 
 | Action | How |
 | --- | --- |
-| Copy | Select with the mouse, then `Ctrl+Shift+C` (`Cmd+C` on macOS). `Ctrl+C` also copies **while there is a selection**; without one it is still the interrupt signal. The **Copy** button and the right-click menu work too. |
+| Copy | Select with the mouse, then `Ctrl+Shift+C` (`Cmd+C` on macOS). `Ctrl+C` also copies **while there is a selection**; without one it is still the interrupt signal. The **Copy** button works too, and so does **Copy** in the right-click menu, which keeps the whole selection. |
 | Paste | `Ctrl+Shift+V`, `Shift+Insert` (`Cmd+V` on macOS), or the **Paste** button. Plain `Ctrl+V` is sent to the shell. |
 | Select under tmux, vim or htop | Those programs capture the mouse: hold `Shift` while dragging (`Option` on macOS). |
 
