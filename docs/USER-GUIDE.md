@@ -395,16 +395,14 @@ ssh-keygen -R 192.168.0.50          # port 22
 ssh-keygen -R '[192.168.0.50]:2222' # another port
 ```
 
-**From the application**, in the browser console (`F12` → *Console*):
+**From the application**: press **Forget key** on the host card and confirm.
 
-```js
-await fetch('/api/hosts/home-server/hostkey', {
-  method: 'DELETE',
-  headers: { 'x-ssh-web-csrf': document.cookie.match(/ssh_web_csrf=([^;]+)/)[1] },
-}).then((r) => r.json())
-```
+The next connection pins the new key, shows its fingerprint in the terminal
+so you can compare it, and records it in the activity log.
 
-The next connection pins the new key and it is recorded in the audit log.
+A server that presents a key of a **different type** from the one saved (RSA
+when the file has ed25519, say) is treated as a key change too, not as a first
+use.
 
 ---
 
@@ -469,19 +467,31 @@ The web session lasts 12 hours.
 
 ---
 
-## Not in the interface yet
+## Editing a host
 
-These work in the API but have no button. Use the browser console as in the
-example above:
+Press **Edit** on the host card to change the address, port, user or key. The
+alias cannot be changed: it identifies the block in the file. Only the lines
+of those four directives are rewritten; comments and any other directive in
+the block are left alone. Blocks with wildcards or several aliases have to be
+edited by hand.
 
-- **Editing a host** (`PATCH /api/hosts/<alias>`): change host, port, user or
-  key. From the interface you have to delete and recreate, though editing the
-  file by hand is usually quicker.
-- **Reading the audit log** (`GET /api/audit`): who signed in, when, which
-  hosts were created, which sessions were opened and closed, and any detected
-  server key change.
-- **Forgetting a server key** (`DELETE /api/hosts/<alias>/hostkey`), explained
-  above.
+---
+
+## Activity log
+
+The **Activity** panel on the dashboard lists the most recent events of your
+account, newest first: sign-ins and failed attempts, hosts created, edited or
+deleted, sessions opened and closed, stored passwords, and server key events.
+
+Two entries deserve attention when they appear:
+
+- `hostkey.pinned`: a server key was accepted for the first time. The detail
+  carries its fingerprint.
+- `hostkey.mismatch`: a server presented a key that does not match the saved
+  one and the connection was cut.
+
+The **From** column is the address of the connection. Behind a reverse proxy
+it shows the proxy unless `SSH_WEB_TRUST_PROXY=true` is set.
 
 ---
 

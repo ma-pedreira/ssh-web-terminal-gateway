@@ -7,11 +7,15 @@ export function HostGrid({
   hosts,
   busyAlias,
   onConnect,
+  onEdit,
+  onForgetKey,
   onDelete,
 }: {
   readonly hosts: readonly ConfiguredHost[]
   readonly busyAlias: string | null
   readonly onConnect: (host: ConfiguredHost) => void
+  readonly onEdit: (host: ConfiguredHost) => void
+  readonly onForgetKey: (host: ConfiguredHost) => void
   readonly onDelete: (host: ConfiguredHost) => void
 }) {
   if (hosts.length === 0) {
@@ -67,10 +71,23 @@ export function HostGrid({
               </p>
             ) : null}
 
-            <div className="mt-4 flex items-center gap-2">
+            <div className="mt-4 flex flex-wrap items-center gap-2">
               <Button onClick={() => onConnect(host)} disabled={connecting || keyMissing}>
                 {connecting ? 'Connecting' : 'Connect'}
               </Button>
+              <Button tone="neutral" onClick={() => onEdit(host)} disabled={connecting}>
+                Edit
+              </Button>
+              {host.known ? (
+                <Button
+                  tone="amber"
+                  onClick={() => onForgetKey(host)}
+                  disabled={connecting}
+                  title="Remove this server's key from known_hosts"
+                >
+                  Forget key
+                </Button>
+              ) : null}
               <Button tone="rose" onClick={() => onDelete(host)} disabled={connecting}>
                 Delete
               </Button>

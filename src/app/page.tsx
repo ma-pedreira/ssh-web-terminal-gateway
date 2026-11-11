@@ -5,7 +5,8 @@ import { useRouter } from 'next/navigation'
 import { api, ApiRequestError } from '@/client/api'
 import { Button, Notice, Panel } from '@/components/ui/primitives'
 import { Brand } from '@/components/ui/Brand'
-import { HostForm } from '@/components/hosts/HostForm'
+import { HostEditor, HostForm } from '@/components/hosts/HostForm'
+import { AuditPanel } from '@/components/audit/AuditPanel'
 import { HostGrid } from '@/components/hosts/HostGrid'
 import {
   SecretPrompt,
@@ -31,6 +32,7 @@ export default function DashboardPage() {
   const [prompt, setPrompt] = useState<SecretRequest | null>(null)
   const [vaultState, setVaultState] = useState<VaultState>('disabled')
   const [error, setError] = useState<string | null>(null)
+  const [editing, setEditing] = useState<ConfiguredHost | null>(null)
 
   const refresh = useCallback(async () => {
     const [hostList, sessionList, settings] = await Promise.all([
@@ -131,6 +133,25 @@ export default function DashboardPage() {
     }
   }
 
+  /**
+   * Only for when the key change is expected (the server was reinstalled).
+   * The next connection will pin whatever key the server presents.
+   */
+  async function forgetHostKey(host: ConfiguredHost) {
+    const confirmed = window.confirm(
+      `Forget the saved key of ${host.hostname}?\n\n` +
+        'Do this only if you know the server key changed, for example after reinstalling it. ' +
+        'The next connection will trust whatever key it presents.',
+    )
+    if (!confirmed) return
+    try {
+      await api(`/api/hosts/${encodeURIComponent(host.alias)}/hostkey`, { method: 'DELETE' })
+      await refresh()
+    } catch (cause) {
+      setError(cause instanceof ApiRequestError ? cause.message : 'Could not forget the key')
+    }
+  }
+
   async function signOut() {
     await api('/api/auth/logout', { method: 'POST' }).catch(() => undefined)
     router.replace('/login')
@@ -167,10 +188,23 @@ export default function DashboardPage() {
           <div className="h-px flex-1 bg-hairline" />
           <HostForm onCreated={() => void refresh()} />
         </div>
+        {editing ? (
+          <HostEditor
+            key={editing.alias}
+            host={editing}
+            onSaved={() => {
+              setEditing(null)
+              void refresh()
+            }}
+            onCancel={() => setEditing(null)}
+          />
+        ) : null}
         <HostGrid
           hosts={hosts}
           busyAlias={busyAlias}
           onConnect={(host) => void openSession(host.alias)}
+          onEdit={setEditing}
+          onForgetKey={(host) => void forgetHostKey(host)}
           onDelete={removeHost}
         />
       </section>
@@ -188,6 +222,8 @@ export default function DashboardPage() {
           await refresh()
         }}
       />
+
+      <AuditPanel />
 
       <Panel title="Where everything lives">
         <ul className="flex flex-col gap-1.5 p-4 text-[11px] text-ink-dim">

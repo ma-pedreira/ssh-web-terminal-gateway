@@ -3,19 +3,36 @@
 import { useEffect, useState } from 'react'
 import { api, ApiRequestError } from '@/client/api'
 import { Button, Field, Notice, Panel, Select } from '@/components/ui/primitives'
+import type { ConfiguredHost } from '#types'
 
-export function HostForm({ onCreated }: { readonly onCreated: () => void }) {
-  const [open, setOpen] = useState(false)
+/**
+ * Form for a Host block. Without `host` it creates one; with it, it edits
+ * that block. The alias cannot be changed: it is what identifies the block in
+ * the file, and what stored passwords and the history refer to.
+ */
+export function HostEditor({
+  host,
+  onSaved,
+  onCancel,
+}: {
+  readonly host?: ConfiguredHost
+  readonly onSaved: () => void
+  readonly onCancel: () => void
+}) {
   const [keys, setKeys] = useState<readonly string[]>([])
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
-    if (!open) return
     api<{ keys: readonly string[] }>('/api/keys')
       .then((data) => setKeys(data.keys))
       .catch(() => setKeys([]))
-  }, [open])
+  }, [])
+
+  // A key named in the file but missing from the mounted directory is still
+  // offered, so saving does not silently drop it.
+  const current = host?.identityFile ?? ''
+  const options = current.length > 0 && !keys.includes(current) ? [current, ...keys] : keys
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -24,20 +41,30 @@ export function HostForm({ onCreated }: { readonly onCreated: () => void }) {
 
     const form = new FormData(event.currentTarget)
     const identityFile = String(form.get('identityFile') ?? '')
+    const fields = {
+      hostname: String(form.get('hostname') ?? ''),
+      port: Number(form.get('port') ?? 22),
+      user: String(form.get('user') ?? ''),
+    }
 
     try {
-      await api('/api/hosts', {
-        method: 'POST',
-        body: {
-          alias: String(form.get('alias') ?? ''),
-          hostname: String(form.get('hostname') ?? ''),
-          port: Number(form.get('port') ?? 22),
-          user: String(form.get('user') ?? ''),
-          identityFile: identityFile.length > 0 ? identityFile : undefined,
-        },
-      })
-      setOpen(false)
-      onCreated()
+      if (host) {
+        // An empty identityFile removes the directive from the block.
+        await api(`/api/hosts/${encodeURIComponent(host.alias)}`, {
+          method: 'PATCH',
+          body: { ...fields, identityFile },
+        })
+      } else {
+        await api('/api/hosts', {
+          method: 'POST',
+          body: {
+            alias: String(form.get('alias') ?? ''),
+            ...fields,
+            identityFile: identityFile.length > 0 ? identityFile : undefined,
+          },
+        })
+      }
+      onSaved()
     } catch (cause) {
       setError(cause instanceof ApiRequestError ? cause.message : 'Unexpected error')
     } finally {
@@ -45,38 +72,46 @@ export function HostForm({ onCreated }: { readonly onCreated: () => void }) {
     }
   }
 
-  if (!open) {
-    return (
-      <Button tone="violet" onClick={() => setOpen(true)}>
-        + Add host
-      </Button>
-    )
-  }
-
   return (
-    <Panel title="New host" className="w-full">
+    <Panel title={host ? `Edit host · ${host.alias}` : 'New host'} className="w-full">
       <form onSubmit={submit} className="grid gap-4 p-4 sm:grid-cols-2">
-        <Field
-          label="Alias"
-          name="alias"
-          required
-          placeholder="servidor-casa"
-          hint="The name of the Host block in ~/.ssh/config"
-        />
+        {host ? null : (
+          <Field
+            label="Alias"
+            name="alias"
+            required
+            placeholder="servidor-casa"
+            hint="The name of the Host block in ~/.ssh/config"
+          />
+        )}
         <Field
           label="Host or IP"
           name="hostname"
           required
+          defaultValue={host?.hostname}
           placeholder="192.168.0.50"
           hint="IPv4, IPv6 or host name"
         />
-        <Field label="Port" name="port" type="number" defaultValue={22} min={1} max={65535} />
-        <Field label="Remote user" name="user" required placeholder="debian" />
+        <Field
+          label="Port"
+          name="port"
+          type="number"
+          defaultValue={host?.port ?? 22}
+          min={1}
+          max={65535}
+        />
+        <Field
+          label="Remote user"
+          name="user"
+          required
+          defaultValue={host?.user ?? undefined}
+          placeholder="debian"
+        />
 
         <div className="sm:col-span-2">
-          <Select label="Private key (IdentityFile)" name="identityFile" defaultValue="">
+          <Select label="Private key (IdentityFile)" name="identityFile" defaultValue={current} key={options.join('|')}>
             <option value="">None: it will ask for a password on connect</option>
-            {keys.map((key) => (
+            {options.map((key) => (
               <option key={key} value={key}>
                 {key}
               </option>
@@ -84,11 +119,20 @@ export function HostForm({ onCreated }: { readonly onCreated: () => void }) {
           </Select>
         </div>
 
-        {keys.length === 0 ? (
+        {options.length === 0 ? (
           <div className="sm:col-span-2">
             <Notice tone="cyan">
               There are no keys in the mounted directory. Without one, the password is asked for on
               every connection and is not stored anywhere.
+            </Notice>
+          </div>
+        ) : null}
+
+        {host ? (
+          <div className="sm:col-span-2">
+            <Notice tone="neutral">
+              Changing the address or the port makes the next connection a first use: the server
+              key is pinned per address.
             </Notice>
           </div>
         ) : null}
@@ -103,11 +147,33 @@ export function HostForm({ onCreated }: { readonly onCreated: () => void }) {
           <Button type="submit" disabled={busy}>
             {busy ? 'Saving' : 'Save to ~/.ssh/config'}
           </Button>
-          <Button type="button" tone="neutral" onClick={() => setOpen(false)}>
+          <Button type="button" tone="neutral" onClick={onCancel}>
             Cancel
           </Button>
         </div>
       </form>
     </Panel>
+  )
+}
+
+export function HostForm({ onCreated }: { readonly onCreated: () => void }) {
+  const [open, setOpen] = useState(false)
+
+  if (!open) {
+    return (
+      <Button tone="violet" onClick={() => setOpen(true)}>
+        + Add host
+      </Button>
+    )
+  }
+
+  return (
+    <HostEditor
+      onSaved={() => {
+        setOpen(false)
+        onCreated()
+      }}
+      onCancel={() => setOpen(false)}
+    />
   )
 }
