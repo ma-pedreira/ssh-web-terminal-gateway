@@ -3,7 +3,7 @@ import { Client, type ClientChannel, type ConnectConfig } from 'ssh2'
 import { getSettings } from '#lib/settings/store'
 import { logger } from '#lib/logger'
 import { resolveIdentityPath } from '#lib/ssh-config/paths'
-import { trustHostKey, verifyKnownHost } from '#lib/ssh-config/store'
+import { knownHostKeyAlgorithms, trustHostKey, verifyKnownHost } from '#lib/ssh-config/store'
 import type { ResolvedHost } from '#lib/ssh-config/types'
 
 export const CONNECT_TIMEOUT_MS = 20_000
@@ -158,6 +158,15 @@ export function establishConnection(
 
         return true
       },
+    }
+
+    // A pinned host is asked only for the key types on file: the verifier
+    // refuses any other type, so the server must not be free to pick one.
+    const pinned = knownHostKeyAlgorithms(host.hostname, host.port)
+    if (pinned.length > 0) {
+      config.algorithms = {
+        serverHostKey: pinned as NonNullable<ConnectConfig['algorithms']>['serverHostKey'],
+      }
     }
 
     if (host.identityFile) {

@@ -29,6 +29,8 @@ interface Entry {
   readonly keyType: string
   readonly key: string
   readonly revoked: boolean
+  /** A CA line vouches for certificates; it does not pin a host key. */
+  readonly certAuthority: boolean
 }
 
 function parseLine(line: string): Entry | null {
@@ -38,10 +40,12 @@ function parseLine(line: string): Entry | null {
   const fields = content.split(/\s+/)
   let index = 0
   let revoked = false
+  let certAuthority = false
 
   // The @revoked and @cert-authority markers precede the pattern.
   if (fields[index]?.startsWith('@')) {
     revoked = fields[index] === '@revoked'
+    certAuthority = fields[index] === '@cert-authority'
     index += 1
   }
 
@@ -59,10 +63,11 @@ function parseLine(line: string): Entry | null {
       keyType,
       key,
       revoked,
+      certAuthority,
     }
   }
 
-  return { patterns: hosts.split(','), hashed: null, keyType, key, revoked }
+  return { patterns: hosts.split(','), hashed: null, keyType, key, revoked, certAuthority }
 }
 
 function matchesHost(entry: Entry, pattern: string, hostname: string): boolean {
@@ -81,9 +86,24 @@ function matchesHost(entry: Entry, pattern: string, hostname: string): boolean {
   return entry.patterns.includes(pattern) || entry.patterns.includes(hostname)
 }
 
+/** Entries that pin a key for this host. Certificate authorities do not. */
+function entriesFor(text: string, hostname: string, port: number): readonly Entry[] {
+  const pattern = hostPattern(hostname, port)
+  return text
+    .split('\n')
+    .map(parseLine)
+    .filter((entry): entry is Entry => entry !== null)
+    .filter((entry) => !entry.certAuthority)
+    .filter((entry) => matchesHost(entry, pattern, hostname))
+}
+
 /**
  * Checks the server key against the standard known_hosts file.
  * `unknown` means first use; `mismatch` means the key changed or was revoked.
+ *
+ * A host that is already pinned must present a pinned key. A key of another
+ * algorithm is a mismatch, not a first use: if it were, whoever intercepts
+ * the connection would only need a key of a different type to be trusted.
  */
 export function verifyAgainstKnownHosts(
   text: string,
@@ -92,26 +112,58 @@ export function verifyAgainstKnownHosts(
   key: Buffer,
 ): KnownHostsVerdict {
   const keyType = keyTypeOf(key) ?? 'unknown'
-  const pattern = hostPattern(hostname, port)
   const encoded = key.toString('base64')
-
-  const candidates = text
-    .split('\n')
-    .map(parseLine)
-    .filter((entry): entry is Entry => entry !== null)
-    .filter((entry) => matchesHost(entry, pattern, hostname))
-    .filter((entry) => entry.keyType === keyType)
-
-  if (candidates.length === 0) return { outcome: 'unknown', keyType }
+  const entries = entriesFor(text, hostname, port)
+  const candidates = entries.filter((entry) => entry.keyType === keyType)
 
   const trusted = candidates.filter((entry) => !entry.revoked && entry.key === encoded)
   if (trusted.length > 0) return { outcome: 'trusted', keyType }
 
-  return {
-    outcome: 'mismatch',
-    keyType,
-    expected: Object.freeze(candidates.map((entry) => entry.key)),
+  if (candidates.length > 0) {
+    return {
+      outcome: 'mismatch',
+      keyType,
+      expected: Object.freeze(candidates.map((entry) => entry.key)),
+    }
   }
+
+  const pinnedOtherTypes = entries.filter((entry) => !entry.revoked)
+  if (pinnedOtherTypes.length > 0) {
+    return {
+      outcome: 'mismatch',
+      keyType,
+      expected: Object.freeze(pinnedOtherTypes.map((entry) => entry.key)),
+    }
+  }
+
+  return { outcome: 'unknown', keyType }
+}
+
+// What ssh2 can negotiate for each key type stored in known_hosts. An RSA key
+// is stored as "ssh-rsa" whatever signature algorithm is used on the wire.
+const NEGOTIABLE: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  'ssh-ed25519': ['ssh-ed25519'],
+  'ecdsa-sha2-nistp256': ['ecdsa-sha2-nistp256'],
+  'ecdsa-sha2-nistp384': ['ecdsa-sha2-nistp384'],
+  'ecdsa-sha2-nistp521': ['ecdsa-sha2-nistp521'],
+  'ssh-rsa': ['rsa-sha2-512', 'rsa-sha2-256', 'ssh-rsa'],
+})
+
+/**
+ * Host key algorithms to request from a host that is already pinned, so the
+ * server answers with a key type we can verify. Without this, a server with
+ * several keys could present one that is not in the file and be refused even
+ * though nothing changed. Empty means no restriction (first use).
+ */
+export function pinnedHostKeyAlgorithms(
+  text: string,
+  hostname: string,
+  port: number,
+): readonly string[] {
+  const algorithms = entriesFor(text, hostname, port)
+    .filter((entry) => !entry.revoked)
+    .flatMap((entry) => NEGOTIABLE[entry.keyType] ?? [])
+  return Object.freeze([...new Set(algorithms)])
 }
 
 /**
@@ -119,12 +171,7 @@ export function verifyAgainstKnownHosts(
  * Used to tell whether the next connection will be a first use.
  */
 export function hasKnownHostEntry(text: string, hostname: string, port: number): boolean {
-  const pattern = hostPattern(hostname, port)
-  return text
-    .split('\n')
-    .map(parseLine)
-    .filter((entry): entry is Entry => entry !== null)
-    .some((entry) => matchesHost(entry, pattern, hostname))
+  return entriesFor(text, hostname, port).length > 0
 }
 
 /** Appends the key to the file, in the same format ssh writes. */

@@ -15,6 +15,7 @@ import { removeHost, upsertHost, type HostEntry } from '#lib/ssh-config/writer'
 import {
   appendHostKey,
   hasKnownHostEntry,
+  pinnedHostKeyAlgorithms,
   verifyAgainstKnownHosts,
   type KnownHostsVerdict,
 } from '#lib/ssh/known-hosts-file'
@@ -77,6 +78,11 @@ export function deleteHost(alias: string): boolean {
 export function verifyKnownHost(hostname: string, port: number, key: Buffer): KnownHostsVerdict {
   const path = knownHostsPath(getSettings().sshDir)
   return verifyAgainstKnownHosts(readOrEmpty(path), hostname, port, key)
+}
+
+/** Host key algorithms to request from a host that is already pinned. */
+export function knownHostKeyAlgorithms(hostname: string, port: number): readonly string[] {
+  return pinnedHostKeyAlgorithms(readOrEmpty(knownHostsPath(getSettings().sshDir)), hostname, port)
 }
 
 /** Whether a fingerprint is already pinned for this host, of any key type. */

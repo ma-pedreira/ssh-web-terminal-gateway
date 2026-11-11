@@ -5,6 +5,7 @@ import {
   hasKnownHostEntry,
   hostPattern,
   keyTypeOf,
+  pinnedHostKeyAlgorithms,
   verifyAgainstKnownHosts,
 } from '#lib/ssh/known-hosts-file'
 
@@ -89,9 +90,67 @@ describe('verifying against known_hosts', () => {
     expect(verifyAgainstKnownHosts(text, 'nas.local', 22, CLAVE).outcome).toBe('mismatch')
   })
 
-  it('ignores entries of a different key type', () => {
-    const text = `nas.local ssh-rsa ${B64}\n`
+  it('rejects a key of a different type when the host is already pinned', () => {
+    // Otherwise whoever intercepts the connection only has to present a key
+    // of another algorithm to be treated as a first use and trusted.
+    const text = `nas.local ssh-ed25519 ${B64}\n`
+    const verdict = verifyAgainstKnownHosts(text, 'nas.local', 22, blob('ssh-rsa', 'intruder'))
+    expect(verdict.outcome).toBe('mismatch')
+  })
+
+  it('trusts a host pinned with several key types', () => {
+    const rsa = blob('ssh-rsa', 'rsa-body')
+    const text = `nas.local ssh-ed25519 ${B64}\nnas.local ssh-rsa ${rsa.toString('base64')}\n`
+    expect(verifyAgainstKnownHosts(text, 'nas.local', 22, rsa).outcome).toBe('trusted')
+    expect(verifyAgainstKnownHosts(text, 'nas.local', 22, CLAVE).outcome).toBe('trusted')
+  })
+
+  it('does not let a certificate authority line pin a host', () => {
+    const text = `@cert-authority nas.local ssh-rsa ${B64}\n`
     expect(verifyAgainstKnownHosts(text, 'nas.local', 22, CLAVE).outcome).toBe('unknown')
+    expect(hasKnownHostEntry(text, 'nas.local', 22)).toBe(false)
+  })
+
+  it('does not count a revoked key of another type as a pin', () => {
+    const text = `@revoked nas.local ssh-rsa ${B64}\n`
+    expect(verifyAgainstKnownHosts(text, 'nas.local', 22, CLAVE).outcome).toBe('unknown')
+  })
+})
+
+describe('host key algorithms to request', () => {
+  it('returns nothing for a host that is not pinned', () => {
+    expect(pinnedHostKeyAlgorithms('', 'nas.local', 22)).toEqual([])
+  })
+
+  it('asks only for the pinned type', () => {
+    const text = `nas.local ssh-ed25519 ${B64}\n`
+    expect(pinnedHostKeyAlgorithms(text, 'nas.local', 22)).toEqual(['ssh-ed25519'])
+  })
+
+  it('expands RSA to its modern signature algorithms', () => {
+    const text = `[nas.local]:2222 ssh-rsa ${B64}\n`
+    expect(pinnedHostKeyAlgorithms(text, 'nas.local', 2222)).toEqual([
+      'rsa-sha2-512',
+      'rsa-sha2-256',
+      'ssh-rsa',
+    ])
+  })
+
+  it('combines several pinned types without repeating them', () => {
+    const text = `nas.local ecdsa-sha2-nistp256 ${B64}\nnas.local ssh-ed25519 ${B64}\nnas.local ssh-ed25519 ${B64}\n`
+    expect(pinnedHostKeyAlgorithms(text, 'nas.local', 22)).toEqual([
+      'ecdsa-sha2-nistp256',
+      'ssh-ed25519',
+    ])
+  })
+
+  it('skips revoked keys, authorities and types the client cannot negotiate', () => {
+    const text = [
+      `@revoked nas.local ssh-rsa ${B64}`,
+      `@cert-authority nas.local ecdsa-sha2-nistp256 ${B64}`,
+      `nas.local sk-ssh-ed25519@openssh.com ${B64}`,
+    ].join('\n')
+    expect(pinnedHostKeyAlgorithms(text, 'nas.local', 22)).toEqual([])
   })
 })
 
