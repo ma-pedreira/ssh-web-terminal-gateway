@@ -30,6 +30,16 @@ describe('confirmPassword', () => {
     await expect(confirmPassword(db, user, 'correct-password-1')).rejects.toMatchObject({ status: 429 })
   })
 
+  it('counts guesses made in parallel', async () => {
+    const burst = Array.from({ length: MAX_ATTEMPTS + 4 }, () => confirmPassword(db, user, 'nope'))
+    const results = await Promise.allSettled(burst)
+    const statuses = results.map((result) =>
+      result.status === 'rejected' ? (result.reason as { status: number }).status : 0,
+    )
+    expect(statuses.filter((status) => status === 403)).toHaveLength(MAX_ATTEMPTS)
+    expect(statuses.filter((status) => status === 429)).toHaveLength(4)
+  })
+
   it('does not lock the sign-in form: the counters are separate', async () => {
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
       await expect(confirmPassword(db, user, 'nope')).rejects.toBeDefined()

@@ -47,12 +47,17 @@ interface LiveSession {
 
 interface ManagerState {
   readonly live: Map<string, LiveSession>
+  /** Connections being established, per user: they already hold a slot. */
+  readonly pending: Map<string, number>
 }
 
 // A single registry per process, resilient to Next's hot reload.
 const globalKey = Symbol.for('ssh-web.session-manager')
 const store = globalThis as unknown as Record<symbol, ManagerState | undefined>
-const state: ManagerState = store[globalKey] ?? { live: new Map<string, LiveSession>() }
+const state: ManagerState = store[globalKey] ?? {
+  live: new Map<string, LiveSession>(),
+  pending: new Map<string, number>(),
+}
 store[globalKey] = state
 
 function broadcast(session: LiveSession, chunk: Buffer): void {
@@ -175,9 +180,28 @@ export async function openSession(
 ): Promise<string> {
   // Each live session holds a connection and a replay buffer in memory:
   // without a cap, a loop of requests would exhaust the process.
+  // The slot is reserved before the first await: the connection takes
+  // seconds to establish, and a burst of parallel requests must not all pass
+  // the check before any of them counts as live.
   const limit = maxSessionsPerUser()
-  if (liveSessionIds(options.userId).size >= limit) throw new SessionLimitError(limit)
+  const reserved = state.pending.get(options.userId) ?? 0
+  if (liveSessionIds(options.userId).size + reserved >= limit) throw new SessionLimitError(limit)
+  state.pending.set(options.userId, reserved + 1)
 
+  try {
+    return await connectAndRegister(db, host, options)
+  } finally {
+    const remaining = (state.pending.get(options.userId) ?? 1) - 1
+    if (remaining > 0) state.pending.set(options.userId, remaining)
+    else state.pending.delete(options.userId)
+  }
+}
+
+async function connectAndRegister(
+  db: DatabaseSync,
+  host: ResolvedHost,
+  options: OpenOptions,
+): Promise<string> {
   const row = sessions.openSession(db, {
     userId: options.userId,
     hostAlias: host.alias,

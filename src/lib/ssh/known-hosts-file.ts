@@ -10,6 +10,21 @@ export function hostPattern(hostname: string, port: number): string {
   return port === 22 ? hostname : `[${hostname}]:${port}`
 }
 
+/** Host names are case-insensitive; OpenSSH lowercases them before matching. */
+function lookupName(hostname: string, port: number): string {
+  return hostPattern(hostname.toLowerCase(), port)
+}
+
+/** known_hosts globbing: `*` is any run of characters, `?` exactly one. */
+function globMatches(glob: string, name: string): boolean {
+  const source = glob
+    .toLowerCase()
+    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+    .replace(/\*/g, '.*')
+    .replace(/\?/g, '.')
+  return new RegExp(`^${source}$`).test(name)
+}
+
 /**
  * Extracts the algorithm from the public key blob.
  * SSH format: a 4-byte length integer followed by the name.
@@ -75,31 +90,68 @@ function parseLine(line: string): Entry | null {
   return { patterns: hosts.split(','), hashed: null, keyType, key, revoked, certAuthority }
 }
 
-function matchesHost(entry: Entry, pattern: string, hostname: string): boolean {
+/**
+ * Whether an entry is about this host and port.
+ *
+ * `name` is what OpenSSH would look up: the bare host on port 22 and
+ * `[host]:port` otherwise. A port-22 entry says nothing about another port:
+ * two servers can share an address, each with its own key.
+ *
+ * As in OpenSSH, an entry matches when one of its patterns does and none of
+ * its negated (`!`) patterns does.
+ */
+function matchesHost(entry: Entry, name: string): boolean {
   if (entry.hashed) {
     // The name is stored as HMAC-SHA1 using the salt of the entry itself.
-    const computed = createHmac('sha1', entry.hashed.salt).update(pattern).digest()
-    if (computed.byteLength !== entry.hashed.hash.byteLength) return false
-    if (timingSafeEqual(computed, entry.hashed.hash)) return true
-
-    const bare = createHmac('sha1', entry.hashed.salt).update(hostname).digest()
+    const computed = createHmac('sha1', entry.hashed.salt).update(name).digest()
     return (
-      bare.byteLength === entry.hashed.hash.byteLength && timingSafeEqual(bare, entry.hashed.hash)
+      computed.byteLength === entry.hashed.hash.byteLength &&
+      timingSafeEqual(computed, entry.hashed.hash)
     )
   }
 
-  return entry.patterns.includes(pattern) || entry.patterns.includes(hostname)
+  const negated = entry.patterns.filter((pattern) => pattern.startsWith('!'))
+  if (negated.some((pattern) => globMatches(pattern.slice(1), name))) return false
+
+  return entry.patterns
+    .filter((pattern) => !pattern.startsWith('!'))
+    .some((pattern) => globMatches(pattern, name))
 }
 
 /** Entries that pin a key for this host. Certificate authorities do not. */
 function entriesFor(text: string, hostname: string, port: number): readonly Entry[] {
-  const pattern = hostPattern(hostname, port)
+  const name = lookupName(hostname, port)
   return text
     .split('\n')
     .map(parseLine)
     .filter((entry): entry is Entry => entry !== null)
     .filter((entry) => !entry.certAuthority)
-    .filter((entry) => matchesHost(entry, pattern, hostname))
+    .filter((entry) => matchesHost(entry, name))
+}
+
+/**
+ * Forgets the keys pinned for a host so that a new first use is allowed.
+ *
+ * Every pinning entry goes, hashed ones included: one left behind would keep
+ * refusing the server. Revocations and certificate authorities stay, because
+ * somebody wrote them by hand and on purpose.
+ */
+export function removeHostEntries(
+  text: string,
+  hostname: string,
+  port: number,
+): { readonly text: string; readonly removed: number } {
+  const name = lookupName(hostname, port)
+  const lines = text.split('\n')
+
+  const kept = lines.filter((line) => {
+    const entry = parseLine(line)
+    if (!entry || entry.certAuthority || entry.revoked) return true
+    return !matchesHost(entry, name)
+  })
+
+  const removed = lines.length - kept.length
+  return removed === 0 ? { text, removed } : { text: kept.join('\n'), removed }
 }
 
 /**

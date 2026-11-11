@@ -24,9 +24,12 @@ export async function confirmPassword(db: DatabaseSync, user: User, password: st
     )
   }
 
+  // Counted before verifying, not after: the check takes a while, and guesses
+  // sent in parallel would otherwise all get past the limit together.
+  recordFailedLogin(db, identifier)
+
   const stored = findUserWithHash(db, user.username)
   if (!stored || !(await verifyPassword(password, stored.password_hash))) {
-    recordFailedLogin(db, identifier)
     throw new ApiError('That password is not correct', 403)
   }
 

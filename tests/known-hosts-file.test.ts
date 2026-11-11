@@ -7,6 +7,7 @@ import {
   hostPattern,
   keyTypeOf,
   pinnedHostKeyAlgorithms,
+  removeHostEntries,
   verifyAgainstKnownHosts,
 } from '#lib/ssh/known-hosts-file'
 
@@ -67,6 +68,33 @@ describe('verifying against known_hosts', () => {
     const text = `[nas.local]:2222 ssh-ed25519 ${B64}\n`
     expect(verifyAgainstKnownHosts(text, 'nas.local', 2222, CLAVE).outcome).toBe('trusted')
     expect(verifyAgainstKnownHosts(text, 'nas.local', 22, CLAVE).outcome).toBe('unknown')
+  })
+
+  it('does not let a port-22 entry pin another port of the same machine', () => {
+    // Two servers can share an address on different ports (a container next
+    // to the host). The second must be free to pin its own key.
+    const text = `nas.local ssh-ed25519 ${B64}\n`
+    expect(verifyAgainstKnownHosts(text, 'nas.local', 2222, OTRA).outcome).toBe('unknown')
+  })
+
+  it('compares host names without regard to case', () => {
+    const text = `nas.local ssh-ed25519 ${B64}\n`
+    expect(verifyAgainstKnownHosts(text, 'NAS.Local', 22, CLAVE).outcome).toBe('trusted')
+  })
+
+  it('honours wildcard patterns, so a host pinned by one cannot swap its key', () => {
+    const text = `*.lan,10.0.0.? ssh-ed25519 ${B64}\n`
+    expect(verifyAgainstKnownHosts(text, 'nas.lan', 22, CLAVE).outcome).toBe('trusted')
+    expect(verifyAgainstKnownHosts(text, 'nas.lan', 22, OTRA).outcome).toBe('mismatch')
+    expect(verifyAgainstKnownHosts(text, '10.0.0.7', 22, OTRA).outcome).toBe('mismatch')
+    expect(verifyAgainstKnownHosts(text, '10.0.0.77', 22, OTRA).outcome).toBe('unknown')
+    expect(verifyAgainstKnownHosts(text, 'nas.wan', 22, OTRA).outcome).toBe('unknown')
+  })
+
+  it('honours negated patterns', () => {
+    const text = `*.lan,!guest.lan ssh-ed25519 ${B64}\n`
+    expect(verifyAgainstKnownHosts(text, 'nas.lan', 22, CLAVE).outcome).toBe('trusted')
+    expect(verifyAgainstKnownHosts(text, 'guest.lan', 22, CLAVE).outcome).toBe('unknown')
   })
 
   it('accepts several comma-separated names', () => {
@@ -201,5 +229,45 @@ describe('key fingerprint', () => {
     const expected = `SHA256:${createHash('sha256').update(CLAVE).digest('base64').replace(/=+$/, '')}`
     expect(fingerprintOf(CLAVE)).toBe(expected)
     expect(fingerprintOf(CLAVE)).toMatch(/^SHA256:[A-Za-z0-9+/]{43}$/)
+  })
+})
+
+describe('forgetting a host', () => {
+  const hashedLine = (name: string): string => {
+    const salt = Buffer.from('test-salt-1234567890').subarray(0, 20)
+    const hash = createHmac('sha1', salt).update(name).digest()
+    return `|1|${salt.toString('base64')}|${hash.toString('base64')} ssh-rsa ${B64}`
+  }
+
+  it('removes plain and hashed entries of the host and keeps the rest', () => {
+    const text = [
+      '# a comment',
+      `nas.local ssh-ed25519 ${B64}`,
+      hashedLine('nas.local'),
+      `other.local ssh-ed25519 ${B64}`,
+      '',
+    ].join('\n')
+
+    const result = removeHostEntries(text, 'nas.local', 22)
+    expect(result.removed).toBe(2)
+    expect(result.text).toBe(`# a comment\nother.local ssh-ed25519 ${B64}\n`)
+    expect(hasKnownHostEntry(result.text, 'nas.local', 22)).toBe(false)
+  })
+
+  it('removes only the entry of the given port', () => {
+    const text = `nas.local ssh-ed25519 ${B64}\n[nas.local]:2222 ssh-ed25519 ${B64}\n`
+    const result = removeHostEntries(text, 'nas.local', 2222)
+    expect(result.removed).toBe(1)
+    expect(result.text).toBe(`nas.local ssh-ed25519 ${B64}\n`)
+  })
+
+  it('keeps revocations and certificate authorities: they were written on purpose', () => {
+    const text = `@revoked nas.local ssh-ed25519 ${B64}\n@cert-authority nas.local ssh-rsa ${B64}\n`
+    expect(removeHostEntries(text, 'nas.local', 22)).toEqual({ text, removed: 0 })
+  })
+
+  it('leaves the text untouched when there is nothing to remove', () => {
+    const text = `other.local ssh-ed25519 ${B64}\n`
+    expect(removeHostEntries(text, 'nas.local', 22)).toEqual({ text, removed: 0 })
   })
 })

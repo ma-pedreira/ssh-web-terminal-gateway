@@ -120,6 +120,39 @@ describe('opening a session', () => {
     ).resolves.toBeTypeOf('string')
   })
 
+  it('counts connections still being established towards the limit', async () => {
+    // Otherwise a burst of parallel requests would all pass the check before
+    // any of them had registered as live.
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    establishConnection.mockImplementation(async () => {
+      await gate
+      return { client: new FakeClient(), stream: new FakeStream() }
+    })
+
+    const limit = manager.maxSessionsPerUser()
+    const burst = Array.from({ length: limit + 3 }, () => open())
+    const settled = Promise.allSettled(burst)
+    release()
+
+    const results = await settled
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(limit)
+    expect(
+      results.filter(
+        (result) => result.status === 'rejected' && result.reason instanceof manager.SessionLimitError,
+      ),
+    ).toHaveLength(3)
+  })
+
+  it('frees the reserved slot when a connection fails', async () => {
+    establishConnection.mockRejectedValue(new Error('connection refused'))
+    for (let count = 0; count < manager.maxSessionsPerUser() + 2; count += 1) {
+      await expect(open()).rejects.toThrow('connection refused')
+    }
+  })
+
   it('passes the terminal size to the connection', async () => {
     await manager.openSession(db, HOST, { userId, clientIp: null, cols: 120, rows: 40 })
     expect(establishConnection).toHaveBeenCalledWith(HOST, { cols: 120, rows: 40 }, {})

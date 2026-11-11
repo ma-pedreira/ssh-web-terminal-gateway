@@ -16,6 +16,7 @@ import {
   appendHostKey,
   hasKnownHostEntry,
   pinnedHostKeyAlgorithms,
+  removeHostEntries,
   verifyAgainstKnownHosts,
   type KnownHostsVerdict,
 } from '#lib/ssh/known-hosts-file'
@@ -100,23 +101,7 @@ export function trustHostKey(hostname: string, port: number, key: Buffer): void 
 /** Forgets every entry for a host so a new first use is allowed. */
 export function forgetKnownHost(hostname: string, port: number): number {
   const path = knownHostsPath(getSettings().sshDir)
-  const text = readOrEmpty(path)
-  if (text.length === 0) return 0
-
-  const patterns = new Set([hostname, `[${hostname}]:${port}`])
-  const kept: string[] = []
-  let removed = 0
-
-  for (const line of text.split('\n')) {
-    const hosts = line.trim().split(/\s+/)[0] ?? ''
-    const names = hosts.replace(/^@[a-z-]+\s*/, '').split(',')
-    if (names.some((name) => patterns.has(name))) {
-      removed += 1
-      continue
-    }
-    kept.push(line)
-  }
-
-  if (removed > 0) writeInPlace(path, kept.join('\n'))
-  return removed
+  const result = removeHostEntries(readOrEmpty(path), hostname, port)
+  if (result.removed > 0) writeInPlace(path, result.text)
+  return result.removed
 }
