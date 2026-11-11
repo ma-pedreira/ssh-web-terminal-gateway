@@ -3,6 +3,7 @@ import { Client, type ClientChannel, type ConnectConfig } from 'ssh2'
 import { getSettings } from '#lib/settings/store'
 import { logger } from '#lib/logger'
 import { resolveIdentityPath } from '#lib/ssh-config/paths'
+import { fingerprintOf } from '#lib/ssh/known-hosts-file'
 import { knownHostKeyAlgorithms, trustHostKey, verifyKnownHost } from '#lib/ssh-config/store'
 import type { ResolvedHost } from '#lib/ssh-config/types'
 
@@ -10,14 +11,20 @@ export const CONNECT_TIMEOUT_MS = 20_000
 
 export class HostKeyMismatchError extends Error {
   readonly hostname: string
+  /** What the server presented, for the audit trail. */
+  readonly keyType: string | null
+  readonly fingerprint: string | null
 
-  constructor(hostname: string) {
+  constructor(hostname: string, presented: { keyType: string; fingerprint: string } | null = null) {
     super(
       'The server key does not match the one in known_hosts. ' +
-        'The connection was cut for safety.',
+        'The connection was cut for safety.' +
+        (presented ? ` The server presented ${presented.keyType} ${presented.fingerprint}.` : ''),
     )
     this.name = 'HostKeyMismatchError'
     this.hostname = hostname
+    this.keyType = presented?.keyType ?? null
+    this.fingerprint = presented?.fingerprint ?? null
   }
 }
 
@@ -82,9 +89,17 @@ export function describeSshError(cause: unknown): Error {
   return new SshConnectionError(`The SSH connection failed: ${message}`)
 }
 
+export interface HostKeyInfo {
+  readonly keyType: string
+  readonly fingerprint: string
+  /** True when the key was not in known_hosts and has just been pinned. */
+  readonly firstUse: boolean
+}
+
 export interface EstablishedConnection {
   readonly client: Client
   readonly stream: ClientChannel
+  readonly hostKey: HostKeyInfo | null
 }
 
 export interface ConnectSecrets {
@@ -122,6 +137,7 @@ export function establishConnection(
   return new Promise((resolve, reject) => {
     const client = new Client()
     let settled = false
+    let hostKey: HostKeyInfo | null = null
 
     const fail = (error: Error): void => {
       if (settled) return
@@ -139,6 +155,7 @@ export function establishConnection(
       keepaliveCountMax: 3,
       hostVerifier: (key: Buffer): boolean => {
         const verdict = verifyKnownHost(host.hostname, host.port, key)
+        const presented = { keyType: verdict.keyType, fingerprint: fingerprintOf(key) }
 
         if (verdict.outcome === 'mismatch') {
           logger.error('The server key does not match known_hosts', {
@@ -146,7 +163,7 @@ export function establishConnection(
             port: host.port,
             keyType: verdict.keyType,
           })
-          fail(new HostKeyMismatchError(host.hostname))
+          fail(new HostKeyMismatchError(host.hostname, presented))
           return false
         }
 
@@ -155,6 +172,8 @@ export function establishConnection(
           // ssh client does the first time you connect.
           trustHostKey(host.hostname, host.port, key)
         }
+
+        hostKey = { ...presented, firstUse: verdict.outcome === 'unknown' }
 
         return true
       },
@@ -198,7 +217,7 @@ export function establishConnection(
             return
           }
           settled = true
-          resolve({ client, stream })
+          resolve({ client, stream, hostKey })
         },
       )
     })

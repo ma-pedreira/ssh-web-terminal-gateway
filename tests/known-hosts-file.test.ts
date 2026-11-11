@@ -1,7 +1,8 @@
-import { createHmac } from 'node:crypto'
+import { createHash, createHmac } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import {
   appendHostKey,
+  fingerprintOf,
   hasKnownHostEntry,
   hostPattern,
   keyTypeOf,
@@ -192,5 +193,13 @@ describe('presence of a host in the file', () => {
     const text = `[nas.local]:2222 ssh-ed25519 ${B64}\n`
     expect(hasKnownHostEntry(text, 'nas.local', 2222)).toBe(true)
     expect(hasKnownHostEntry(text, 'nas.local', 22)).toBe(false)
+  })
+})
+
+describe('key fingerprint', () => {
+  it('matches the format ssh-keygen -lf prints', () => {
+    const expected = `SHA256:${createHash('sha256').update(CLAVE).digest('base64').replace(/=+$/, '')}`
+    expect(fingerprintOf(CLAVE)).toBe(expected)
+    expect(fingerprintOf(CLAVE)).toMatch(/^SHA256:[A-Za-z0-9+/]{43}$/)
   })
 })

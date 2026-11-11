@@ -1,7 +1,13 @@
 import type { DatabaseSync } from 'node:sqlite'
 import type { Client, ClientChannel } from 'ssh2'
 import { RingBuffer } from '#lib/ssh/ring-buffer'
-import { establishConnection, MissingSecretError, type ConnectSecrets } from '#lib/ssh/connect'
+import {
+  establishConnection,
+  HostKeyMismatchError,
+  MissingSecretError,
+  type ConnectSecrets,
+  type HostKeyInfo,
+} from '#lib/ssh/connect'
 import { getSettings } from '#lib/settings/store'
 import { getEnv } from '#lib/env'
 import { logger } from '#lib/logger'
@@ -20,6 +26,8 @@ export type SessionEvent =
   | { readonly type: 'status'; readonly status: 'active' | 'suspended' | 'closed' | 'failed' }
   | { readonly type: 'error'; readonly message: string }
   | { readonly type: 'exit'; readonly code: number | null }
+  /** The server key was unknown and has just been pinned: worth a look. */
+  | { readonly type: 'hostkey'; readonly keyType: string; readonly fingerprint: string }
 
 interface LiveSession {
   readonly id: string
@@ -33,6 +41,8 @@ interface LiveSession {
   rows: number
   idleTimer: NodeJS.Timeout | null
   closing: boolean
+  /** Key pinned on this connection, until a client has been told about it. */
+  pinnedKey: HostKeyInfo | null
 }
 
 interface ManagerState {
@@ -180,7 +190,7 @@ export async function openSession(
   })
 
   try {
-    const { client, stream } = await establishConnection(
+    const { client, stream, hostKey } = await establishConnection(
       host,
       { cols: options.cols, rows: options.rows },
       options.secrets ?? {},
@@ -198,6 +208,17 @@ export async function openSession(
       rows: options.rows,
       idleTimer: null,
       closing: false,
+      pinnedKey: hostKey?.firstUse ? hostKey : null,
+    }
+
+    if (hostKey?.firstUse) {
+      record(db, {
+        userId: options.userId,
+        action: 'hostkey.pinned',
+        targetId: host.alias,
+        clientIp: options.clientIp,
+        detail: `${host.alias} (${host.hostname}:${host.port}): ${hostKey.keyType} ${hostKey.fingerprint}`,
+      })
     }
 
     stream.on('data', (chunk: Buffer) => {
@@ -240,6 +261,18 @@ export async function openSession(
       throw error
     }
 
+    // A changed server key is the event this trail exists for: it gets its
+    // own entry, besides the failed session.
+    if (error instanceof HostKeyMismatchError) {
+      record(db, {
+        userId: options.userId,
+        action: 'hostkey.mismatch',
+        targetId: host.alias,
+        clientIp: options.clientIp,
+        detail: `${host.alias} (${host.hostname}:${host.port}) presented ${error.keyType ?? 'an unknown key'} ${error.fingerprint ?? ''}`.trim(),
+      })
+    }
+
     const message = (error as Error).message
     sessions.setStatus(db, row.id, 'failed', { closeReason: message })
     record(db, {
@@ -275,6 +308,17 @@ export function attach(
   sessions.setStatus(db, sessionId, 'active')
   record(db, { userId, action: 'session.attached', targetId: sessionId })
   sink.notify({ type: 'status', status: 'active' })
+
+  // Trust on first use is silent by nature. Whoever opens the terminal is
+  // told once which key was accepted, so it can be checked.
+  if (session.pinnedKey) {
+    sink.notify({
+      type: 'hostkey',
+      keyType: session.pinnedKey.keyType,
+      fingerprint: session.pinnedKey.fingerprint,
+    })
+    session.pinnedKey = null
+  }
   return true
 }
 

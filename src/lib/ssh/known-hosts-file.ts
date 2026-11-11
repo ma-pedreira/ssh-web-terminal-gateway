@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from 'node:crypto'
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto'
 
 export type KnownHostsVerdict =
   | { readonly outcome: 'trusted'; readonly keyType: string }
@@ -21,6 +21,11 @@ export function keyTypeOf(key: Buffer): string | null {
 
   const name = key.subarray(4, 4 + length).toString('utf8')
   return /^[a-z0-9@.-]+$/i.test(name) ? name : null
+}
+
+/** Fingerprint as `ssh-keygen -lf` prints it, to compare by eye. */
+export function fingerprintOf(key: Buffer): string {
+  return `SHA256:${createHash('sha256').update(key).digest('base64').replace(/=+$/, '')}`
 }
 
 interface Entry {

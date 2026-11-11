@@ -45,12 +45,18 @@ export function useTerminalSocket({ sessionId, onOutput, onNotice }: Options): A
           | { type: 'status'; status: string }
           | { type: 'error'; message: string }
           | { type: 'exit'; code: number | null }
+          | { type: 'hostkey'; keyType: string; fingerprint: string }
 
         if (payload.type === 'status') {
           setState(payload.status === 'active' ? 'online' : 'suspended')
         } else if (payload.type === 'error') {
           setState('error')
           onNotice(payload.message)
+        } else if (payload.type === 'hostkey') {
+          onNotice(
+            `First connection to this host: its key (${payload.keyType} ${payload.fingerprint}) ` +
+              'was saved in known_hosts. Check it matches the server if you can.',
+          )
         } else if (payload.type === 'exit') {
           setState('closed')
           onNotice(`The remote shell exited with code ${payload.code ?? 0}`)

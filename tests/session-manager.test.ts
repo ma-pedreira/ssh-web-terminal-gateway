@@ -8,7 +8,10 @@ const establishConnection = vi.fn()
 vi.mock('#lib/ssh/connect', () => ({
   establishConnection,
   CONNECT_TIMEOUT_MS: 1000,
-  HostKeyMismatchError: class extends Error {},
+  HostKeyMismatchError: class extends Error {
+    keyType: string | null = null
+    fingerprint: string | null = null
+  },
   MissingSecretError: class extends Error {},
 }))
 
@@ -360,6 +363,67 @@ describe('lifecycle audit trail', () => {
       'session.detached',
       'session.closed',
     ])
+  })
+})
+
+describe('server key events', () => {
+  const actions = () =>
+    (db.prepare('SELECT action, detail FROM audit_log ORDER BY id').all() as unknown as ReadonlyArray<{
+      action: unknown
+      detail: unknown
+    }>).map((row) => ({ action: String(row.action), detail: String(row.detail) }))
+
+  const firstUse = { keyType: 'ssh-ed25519', fingerprint: 'SHA256:abc', firstUse: true }
+
+  it('records in the audit trail that a new server key was pinned', async () => {
+    establishConnection.mockResolvedValue({ client, stream, hostKey: firstUse })
+    await open()
+    expect(actions()).toContainEqual({
+      action: 'hostkey.pinned',
+      detail: 'target (10.0.0.10:22): ssh-ed25519 SHA256:abc',
+    })
+  })
+
+  it('does not record a pin for a host that was already known', async () => {
+    establishConnection.mockResolvedValue({
+      client,
+      stream,
+      hostKey: { ...firstUse, firstUse: false },
+    })
+    await open()
+    expect(actions().map((entry) => entry.action)).not.toContain('hostkey.pinned')
+  })
+
+  it('tells the first client that attaches about the pinned key, once', async () => {
+    establishConnection.mockResolvedValue({ client, stream, hostKey: firstUse })
+    const id = await open()
+
+    const first = collector()
+    manager.attach(db, id, userId, first.sink)
+    expect(first.events).toContainEqual({
+      type: 'hostkey',
+      keyType: 'ssh-ed25519',
+      fingerprint: 'SHA256:abc',
+    })
+
+    const second = collector()
+    manager.attach(db, id, userId, second.sink)
+    expect(second.events.some((event) => (event as { type: string }).type === 'hostkey')).toBe(false)
+  })
+
+  it('records a server key change in the audit trail', async () => {
+    const { HostKeyMismatchError } = await import('#lib/ssh/connect')
+    const error = Object.assign(new HostKeyMismatchError('10.0.0.10'), {
+      keyType: 'ssh-rsa',
+      fingerprint: 'SHA256:intruder',
+    })
+    establishConnection.mockRejectedValue(error)
+
+    await expect(open()).rejects.toBe(error)
+    expect(actions()).toContainEqual({
+      action: 'hostkey.mismatch',
+      detail: 'target (10.0.0.10:22) presented ssh-rsa SHA256:intruder',
+    })
   })
 })
 
