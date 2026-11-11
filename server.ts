@@ -5,7 +5,8 @@ import next from 'next'
 import { getEnv } from '#lib/env'
 import { logger } from '#lib/logger'
 import { closeDb, getDb } from '#lib/db/client'
-import { purgeExpiredSessions } from '#lib/auth/session'
+import { expiredSessionIds, purgeExpiredSessions } from '#lib/auth/session'
+import { forgetKey } from '#lib/vault/keyring'
 import { purgeOldAttempts } from '#lib/auth/rate-limit'
 import { reconcileOrphans } from '#lib/repos/sessions'
 import { shutdown } from '#lib/ssh/session-manager'
@@ -44,6 +45,8 @@ attachTerminalGateway(server)
 // Periodic cleanup of expired sessions and sign-in attempts.
 const maintenance = setInterval(
   () => {
+    // The vault key of a session must not outlive it in memory.
+    for (const sessionId of expiredSessionIds(db)) forgetKey(sessionId)
     const sessions = purgeExpiredSessions(db)
     const attempts = purgeOldAttempts(db)
     if (sessions > 0 || attempts > 0) logger.debug('Maintenance', { sessions, attempts })

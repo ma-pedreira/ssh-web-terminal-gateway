@@ -6,6 +6,13 @@ import type { User } from '#types'
 /** Lifetime of the web application session (not of the SSH session). */
 export const SESSION_TTL_HOURS = 12
 
+// expires_at is stored as ISO 8601 ("2026-01-01T17:00:00.000Z") and SQLite's
+// datetime('now') is "2026-01-01 20:00:00". Compared as plain text, "T" sorts
+// after " ", so an expired session stayed valid until midnight UTC. Both
+// sides go through datetime() so they are compared as moments, not as text.
+const NOT_EXPIRED = "datetime(expires_at) > datetime('now')"
+const EXPIRED = "datetime(expires_at) <= datetime('now')"
+
 export interface IssuedSession {
   readonly sessionId: string
   readonly token: string
@@ -59,7 +66,7 @@ export function resolveSession(db: DatabaseSync, token: string): ResolvedSession
     .prepare(
       `SELECT id, user_id, csrf_hash
        FROM app_sessions
-       WHERE token_hash = ? AND expires_at > datetime('now')`,
+       WHERE token_hash = ? AND ${NOT_EXPIRED}`,
     )
     .get(hashToken(token)) as { id: string; user_id: string; csrf_hash: string } | undefined
 
@@ -75,7 +82,25 @@ export function destroySession(db: DatabaseSync, token: string): void {
   db.prepare('DELETE FROM app_sessions WHERE token_hash = ?').run(hashToken(token))
 }
 
+/**
+ * Whether an application session still exists and has not expired. Used to
+ * re-check long-lived connections (the terminal WebSocket) that were
+ * authorised when they were opened.
+ */
+export function isSessionActive(db: DatabaseSync, sessionId: string): boolean {
+  const row = db
+    .prepare(`SELECT 1 AS found FROM app_sessions WHERE id = ? AND ${NOT_EXPIRED}`)
+    .get(sessionId)
+  return row !== undefined
+}
+
+/** Sessions about to be purged, so what hangs off them can be released. */
+export function expiredSessionIds(db: DatabaseSync): readonly string[] {
+  const rows = db.prepare(`SELECT id FROM app_sessions WHERE ${EXPIRED}`).all()
+  return Object.freeze(rows.map((row) => String(row.id)))
+}
+
 export function purgeExpiredSessions(db: DatabaseSync): number {
-  const result = db.prepare("DELETE FROM app_sessions WHERE expires_at <= datetime('now')").run()
+  const result = db.prepare(`DELETE FROM app_sessions WHERE ${EXPIRED}`).run()
   return Number(result.changes)
 }

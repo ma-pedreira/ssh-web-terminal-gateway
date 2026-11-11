@@ -5,6 +5,8 @@ import { createUser } from '#lib/repos/users'
 import {
   createAppSession,
   destroySession,
+  expiredSessionIds,
+  isSessionActive,
   purgeExpiredSessions,
   resolveSession,
 } from '#lib/auth/session'
@@ -56,6 +58,32 @@ describe('application sessions', () => {
     const issued = createAppSession(db, user.id, context)
     db.prepare("UPDATE app_sessions SET expires_at = datetime('now', '-1 hour')").run()
     expect(resolveSession(db, issued.token)).toBeNull()
+  })
+
+  // expires_at is stored as ISO 8601 ("...T17:00:00.000Z") while SQLite's
+  // datetime('now') uses a space. Compared as text, "T" sorts after " ", so
+  // an expired session stayed valid until midnight UTC of its expiry day.
+  it('rejects a session that expired moments ago, in its stored format', () => {
+    const issued = createAppSession(db, user.id, context)
+    db.prepare('UPDATE app_sessions SET expires_at = ?').run(new Date(Date.now() - 2000).toISOString())
+    expect(resolveSession(db, issued.token)).toBeNull()
+    expect(isSessionActive(db, issued.sessionId)).toBe(false)
+    expect(expiredSessionIds(db)).toEqual([issued.sessionId])
+    expect(purgeExpiredSessions(db)).toBe(1)
+  })
+
+  it('keeps a session that has not expired yet', () => {
+    const issued = createAppSession(db, user.id, context)
+    expect(isSessionActive(db, issued.sessionId)).toBe(true)
+    expect(expiredSessionIds(db)).toEqual([])
+    expect(purgeExpiredSessions(db)).toBe(0)
+    expect(resolveSession(db, issued.token)).not.toBeNull()
+  })
+
+  it('reports a destroyed session as inactive', () => {
+    const issued = createAppSession(db, user.id, context)
+    destroySession(db, issued.token)
+    expect(isSessionActive(db, issued.sessionId)).toBe(false)
   })
 
   it('records the user last sign-in', () => {

@@ -4,7 +4,7 @@ import { WebSocketServer, type WebSocket } from 'ws'
 import { getDb } from '#lib/db/client'
 import { logger } from '#lib/logger'
 import { parseCookies, SESSION_COOKIE } from '#lib/auth/cookies'
-import { resolveSession } from '#lib/auth/session'
+import { isSessionActive, resolveSession } from '#lib/auth/session'
 import { clientMessageSchema } from '#lib/validation/schemas'
 import * as manager from '#lib/ssh/session-manager'
 import type { SessionEvent, TerminalSink } from '#lib/ssh/session-manager'
@@ -16,6 +16,8 @@ const PING_INTERVAL_MS = 30_000
 interface Authorized {
   readonly userId: string
   readonly sessionId: string
+  /** Application session that authorised the socket, re-checked while it lives. */
+  readonly appSessionId: string
 }
 
 /**
@@ -51,7 +53,7 @@ function authorize(request: IncomingMessage): Authorized | null {
 
   if (!manager.isLive(sessionId, resolved.user.id)) return null
 
-  return { userId: resolved.user.id, sessionId }
+  return { userId: resolved.user.id, sessionId, appSessionId: resolved.sessionId }
 }
 
 function makeSink(socket: WebSocket): TerminalSink {
@@ -109,6 +111,13 @@ export function attachTerminalGateway(server: Server): WebSocketServer {
     const heartbeat = setInterval(() => {
       if (!alive) {
         socket.terminate()
+        return
+      }
+      // The socket was authorised when it opened. After a sign-out or an
+      // expiry it must not keep driving the terminal: the SSH session stays
+      // alive on the server and can be resumed after signing in again.
+      if (!isSessionActive(db, authorized.appSessionId)) {
+        socket.close(1008, 'Your session has ended. Sign in again to resume.')
         return
       }
       alive = false
