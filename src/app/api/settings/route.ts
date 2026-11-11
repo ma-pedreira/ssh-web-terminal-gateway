@@ -1,6 +1,4 @@
-import { getDb } from '#lib/db/client'
-import { findUserWithHash } from '#lib/repos/users'
-import { verifyPassword } from '#lib/crypto/password'
+import { confirmPassword } from '#lib/auth/reauth'
 import { allowedRoots, getSettings, updateSettings } from '#lib/settings/store'
 import { settingsPatchSchema } from '#lib/settings/model'
 import { openOrCreateVault } from '#lib/vault/store'
@@ -41,10 +39,7 @@ export const PUT = route(async (request: Request) => {
     if (!password) {
       throw new ApiError('Enabling the vault needs your password: it is what encrypts it', 428)
     }
-    const stored = findUserWithHash(db, user.username)
-    if (!stored || !(await verifyPassword(password, stored.password_hash))) {
-      throw new ApiError('That password is not correct', 403)
-    }
+    await confirmPassword(db, user, password)
   }
 
   const settings = updateSettings(patch)

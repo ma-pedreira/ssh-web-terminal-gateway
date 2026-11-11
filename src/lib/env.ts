@@ -26,6 +26,14 @@ const schema = z.object({
     .string()
     .default('false')
     .transform((value) => value === 'true'),
+  // True only behind a reverse proxy that overwrites X-Forwarded-For. Without
+  // one, that header is whatever the client chose to send.
+  SSH_WEB_TRUST_PROXY: z
+    .string()
+    .default('false')
+    .transform((value) => value === 'true'),
+  // Live SSH sessions one user may hold at once.
+  SSH_WEB_MAX_SESSIONS: z.coerce.number().int().min(1).max(100).default(10),
   SSH_WEB_SESSION_IDLE_MINUTES: z.coerce.number().int().min(1).max(10080).default(120),
   SSH_WEB_REPLAY_BUFFER_KB: z.coerce.number().int().min(8).max(4096).default(256),
 })

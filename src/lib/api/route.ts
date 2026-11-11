@@ -8,6 +8,7 @@ import {
   MissingSecretError,
   SshConnectionError,
 } from '#lib/ssh/connect'
+import { SessionLimitError } from '#lib/ssh/session-manager'
 
 /** Field names as they appear in the forms. */
 const FIELD_LABELS: Readonly<Record<string, string>> = Object.freeze({
@@ -62,6 +63,9 @@ export function route<T>(handler: Handler<T>): Handler<T> {
       // expired and would trigger an unwanted sign-out.
       if (error instanceof MissingSecretError || error instanceof AuthenticationFailedError) {
         return fail(error.message, 428)
+      }
+      if (error instanceof SessionLimitError) {
+        return fail(error.message, 429)
       }
       if (error instanceof SshConnectionError) {
         return fail(error.message, 502)

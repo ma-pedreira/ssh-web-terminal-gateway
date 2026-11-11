@@ -1,11 +1,10 @@
 import { z } from 'zod'
-import { findUserWithHash } from '#lib/repos/users'
-import { verifyPassword } from '#lib/crypto/password'
+import { confirmPassword } from '#lib/auth/reauth'
 import { getSettings, updateSettings } from '#lib/settings/store'
 import { openOrCreateVault } from '#lib/vault/store'
 import { rememberKey } from '#lib/vault/keyring'
 import { vaultState } from '#lib/vault/credentials'
-import { ApiError, ok } from '#lib/api/respond'
+import { ok } from '#lib/api/respond'
 import { jsonBody, route } from '#lib/api/route'
 import { requireUser } from '#lib/api/guard'
 
@@ -22,10 +21,7 @@ export const POST = route(async (request: Request) => {
   const { db, user, session } = requireUser(request)
   const { password } = bodySchema.parse(await jsonBody(request))
 
-  const stored = findUserWithHash(db, user.username)
-  if (!stored || !(await verifyPassword(password, stored.password_hash))) {
-    throw new ApiError('That password is not correct', 403)
-  }
+  await confirmPassword(db, user, password)
 
   if (!getSettings().vaultEnabled) updateSettings({ vaultEnabled: true })
 

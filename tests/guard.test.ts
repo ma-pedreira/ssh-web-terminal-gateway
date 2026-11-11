@@ -95,16 +95,17 @@ describe('API guard', () => {
     expect(context.user).toBeTruthy()
   })
 
-  it('resolves the client address behind a proxy', () => {
-    expect(clientIpOf(request('GET', { 'x-forwarded-for': '203.0.113.7, 10.0.0.1' }))).toBe(
-      '203.0.113.7',
-    )
-    expect(clientIpOf(request('GET', { 'x-real-ip': '198.51.100.4' }))).toBe('198.51.100.4')
+  it('reads the client address that server.ts resolved', () => {
+    expect(clientIpOf(request('GET', { 'x-real-ip': '203.0.113.7' }))).toBe('203.0.113.7')
     expect(clientIpOf(request('GET'))).toBeNull()
   })
 
+  it('does not believe X-Forwarded-For, which the client can write', () => {
+    expect(clientIpOf(request('GET', { 'x-forwarded-for': '203.0.113.7' }))).toBeNull()
+  })
+
   it('caps the length of the received address', () => {
-    const ip = clientIpOf(request('GET', { 'x-forwarded-for': '9'.repeat(200) }))
+    const ip = clientIpOf(request('GET', { 'x-real-ip': '9'.repeat(200) }))
     expect(ip).toHaveLength(64)
   })
 })

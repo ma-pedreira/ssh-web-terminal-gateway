@@ -3,6 +3,7 @@
 import { createServer } from 'node:http'
 import next from 'next'
 import { getEnv } from '#lib/env'
+import { resolveClientAddress } from '#lib/api/client-address'
 import { logger } from '#lib/logger'
 import { closeDb, getDb } from '#lib/db/client'
 import { expiredSessionIds, purgeExpiredSessions } from '#lib/auth/session'
@@ -29,7 +30,24 @@ const handle = app.getRequestHandler()
 
 await app.prepare()
 
+const header = (value: string | string[] | undefined): string | undefined =>
+  Array.isArray(value) ? value[0] : value
+
 const server = createServer((request, response) => {
+  // The routes read the client address from X-Real-IP. It is rewritten here,
+  // where the TCP connection is visible, so a client cannot choose it.
+  const address = resolveClientAddress(
+    {
+      forwardedFor: header(request.headers['x-forwarded-for']),
+      realIp: header(request.headers['x-real-ip']),
+    },
+    request.socket.remoteAddress,
+    env.SSH_WEB_TRUST_PROXY,
+  )
+  delete request.headers['x-forwarded-for']
+  delete request.headers['x-real-ip']
+  if (address) request.headers['x-real-ip'] = address
+
   handle(request, response).catch((error: unknown) => {
     logger.error('Failed to serve the request', {
       url: request.url,

@@ -102,6 +102,21 @@ describe('opening a session', () => {
     expect(manager.liveSessionIds(userId).has(id)).toBe(true)
   })
 
+  it('refuses to open more sessions than the limit per user', async () => {
+    const fresh = () => {
+      establishConnection.mockResolvedValueOnce({ client: new FakeClient(), stream: new FakeStream() })
+      return open()
+    }
+    for (let count = 0; count < manager.maxSessionsPerUser(); count += 1) await fresh()
+
+    await expect(open()).rejects.toBeInstanceOf(manager.SessionLimitError)
+    // The limit is per user: someone else can still connect.
+    establishConnection.mockResolvedValueOnce({ client: new FakeClient(), stream: new FakeStream() })
+    await expect(
+      manager.openSession(db, HOST, { userId: otherUserId, clientIp: null, cols: 80, rows: 24 }),
+    ).resolves.toBeTypeOf('string')
+  })
+
   it('passes the terminal size to the connection', async () => {
     await manager.openSession(db, HOST, { userId, clientIp: null, cols: 120, rows: 40 })
     expect(establishConnection).toHaveBeenCalledWith(HOST, { cols: 120, rows: 40 }, {})

@@ -3,6 +3,7 @@ import type { Client, ClientChannel } from 'ssh2'
 import { RingBuffer } from '#lib/ssh/ring-buffer'
 import { establishConnection, MissingSecretError, type ConnectSecrets } from '#lib/ssh/connect'
 import { getSettings } from '#lib/settings/store'
+import { getEnv } from '#lib/env'
 import { logger } from '#lib/logger'
 import { record } from '#lib/repos/audit'
 import * as sessions from '#lib/repos/sessions'
@@ -132,6 +133,21 @@ function teardown(
   state.live.delete(session.id)
 }
 
+/** The user already holds as many live sessions as the deployment allows. */
+export class SessionLimitError extends Error {
+  constructor(limit: number) {
+    super(
+      `You already have ${limit} open sessions, the maximum allowed. ` +
+        'Close one you no longer need and try again.',
+    )
+    this.name = 'SessionLimitError'
+  }
+}
+
+export function maxSessionsPerUser(): number {
+  return getEnv().SSH_WEB_MAX_SESSIONS
+}
+
 export interface OpenOptions {
   readonly userId: string
   readonly clientIp: string | null
@@ -147,6 +163,11 @@ export async function openSession(
   host: ResolvedHost,
   options: OpenOptions,
 ): Promise<string> {
+  // Each live session holds a connection and a replay buffer in memory:
+  // without a cap, a loop of requests would exhaust the process.
+  const limit = maxSessionsPerUser()
+  if (liveSessionIds(options.userId).size >= limit) throw new SessionLimitError(limit)
+
   const row = sessions.openSession(db, {
     userId: options.userId,
     hostAlias: host.alias,

@@ -30,6 +30,9 @@ services:
       SSH_WEB_IN_CONTAINER: "true"
       # Ponlo en "true" cuando sirvas por HTTPS.
       SSH_WEB_SECURE_COOKIES: "false"
+      # "true" only behind a reverse proxy that overwrites X-Forwarded-For.
+      SSH_WEB_TRUST_PROXY: "${SSH_WEB_TRUST_PROXY:-false}"
+      SSH_WEB_MAX_SESSIONS: "10"
       SSH_WEB_SESSION_IDLE_MINUTES: "120"
       SSH_WEB_REPLAY_BUFFER_KB: "256"
       SSH_WEB_LOG_LEVEL: info
