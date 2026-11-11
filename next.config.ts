@@ -6,6 +6,10 @@ const config: NextConfig = {
   // El servidor arranca desde server.ts, que ademas atiende el upgrade a
   // WebSocket. Por eso no se usa la salida "standalone".
   serverExternalPackages: ['ssh2'],
+  // The application never uses next/image, but the optimisation endpoint
+  // (/_next/image) is enabled by default and reachable without a session. It
+  // has a history of serious flaws: with nothing to optimise, it is turned off.
+  images: { unoptimized: true },
   async headers() {
     return [
       {
