@@ -9,6 +9,14 @@ import { TerminalWriteQueue } from '@/client/write-queue'
 import { copyText, readClipboard } from '@/client/clipboard'
 import { bufferToText } from '@/client/terminal-text'
 import {
+  DEFAULT_FONT_SIZE,
+  MAX_FONT_SIZE,
+  MIN_FONT_SIZE,
+  loadFontSize,
+  saveFontSize,
+  stepFontSize,
+} from '@/client/font-size'
+import {
   applyModifiers,
   clampViewport,
   specialKeySequence,
@@ -54,7 +62,19 @@ export function TerminalView({
   const modifiersRef = useRef<Modifiers>(NO_MODIFIERS)
   // True while terminal.paste() runs: pasted text must not consume a modifier.
   const pastingRef = useRef(false)
+  const [fontSize, setFontSize] = useState(DEFAULT_FONT_SIZE)
   const coarse = useCoarsePointer()
+
+  // Read after mounting: the server render has no storage to look at.
+  useEffect(() => setFontSize(loadFontSize()), [])
+
+  const changeFontSize = useCallback((delta: 1 | -1) => {
+    setFontSize((current) => {
+      const next = stepFontSize(current, delta)
+      saveFontSize(next)
+      return next
+    })
+  }, [])
   const visible = useVisibleArea()
 
   // The server sends the history as soon as the WebSocket connects, and xterm
@@ -111,6 +131,7 @@ export function TerminalView({
     queue,
     onData,
     onResize: reportSize,
+    fontSize,
     onCopied: (ok) => showFlash(ok ? 'Copied' : 'The browser blocked the clipboard'),
   })
 
@@ -225,6 +246,26 @@ export function TerminalView({
           </span>
         ) : null}
         <div className="ml-auto flex items-center gap-2">
+          <Button
+            tone="neutral"
+            className="hidden sm:inline-flex"
+            onClick={() => changeFontSize(-1)}
+            disabled={fontSize <= MIN_FONT_SIZE}
+            aria-label="Smaller text"
+            title={`Smaller text (${fontSize}px)`}
+          >
+            A-
+          </Button>
+          <Button
+            tone="neutral"
+            className="hidden sm:inline-flex"
+            onClick={() => changeFontSize(1)}
+            disabled={fontSize >= MAX_FONT_SIZE}
+            aria-label="Larger text"
+            title={`Larger text (${fontSize}px)`}
+          >
+            A+
+          </Button>
           <Button tone="neutral" className="hidden sm:inline-flex" onClick={copySelectionOrOpen} title="Ctrl+Shift+C">
             Copy
           </Button>
@@ -288,6 +329,10 @@ export function TerminalView({
           onSelect={openSelect}
           onPaste={() => void paste()}
           onKeyboard={focusTerminal}
+          onFontSize={(delta) => {
+            changeFontSize(delta)
+            focusTerminal()
+          }}
         />
       ) : null}
     </div>

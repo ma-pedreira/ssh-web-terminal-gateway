@@ -11,6 +11,7 @@ interface Props {
   readonly onSelect: () => void
   readonly onPaste: () => void
   readonly onKeyboard: () => void
+  readonly onFontSize: (delta: 1 | -1) => void
 }
 
 const SPECIALS: ReadonlyArray<readonly [SpecialKey, string]> = [
@@ -80,6 +81,7 @@ export function MobileKeyBar({
   onSelect,
   onPaste,
   onKeyboard,
+  onFontSize,
 }: Props) {
   return (
     <div
@@ -115,6 +117,12 @@ export function MobileKeyBar({
       ))}
       <Key onPress={onSelect}>Select</Key>
       <Key onPress={onPaste}>Paste</Key>
+      <Key label="Smaller text" onPress={() => onFontSize(-1)}>
+        A-
+      </Key>
+      <Key label="Larger text" onPress={() => onFontSize(1)}>
+        A+
+      </Key>
       <Key label="Show keyboard" onPress={onKeyboard}>
         Kbd
       </Key>

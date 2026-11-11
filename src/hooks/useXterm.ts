@@ -17,6 +17,8 @@ interface Options {
   readonly onResize: (cols: number, rows: number) => void
   /** Called after a copy shortcut, with whether the copy succeeded. */
   readonly onCopied?: (ok: boolean) => void
+  /** Font size in pixels. Changing it refits and reports the new size. */
+  readonly fontSize: number
 }
 
 /**
@@ -27,8 +29,12 @@ interface Options {
  * the old code only reported changes, so a terminal that never changed size
  * stayed at the placeholder until the window was resized.
  */
-export function useXterm({ hostRef, queue, onData, onResize, onCopied }: Options): RefObject<Terminal | null> {
+export function useXterm({ hostRef, queue, onData, onResize, onCopied, fontSize }: Options): RefObject<Terminal | null> {
   const termRef = useRef<Terminal | null>(null)
+  const refitRef = useRef<(() => void) | null>(null)
+  // Read when the terminal is created, without making its creation depend on
+  // it: a size change must not rebuild the terminal.
+  const fontSizeRef = useRef(fontSize)
   // Callbacks behind refs: changing them must not rebuild the terminal.
   const handlers = useRef({ onData, onResize, onCopied })
   useEffect(() => {
@@ -67,7 +73,7 @@ export function useXterm({ hostRef, queue, onData, onResize, onCopied }: Options
       const host = hostRef.current
       if (disposed || !host) return
 
-      terminal = new Ctor(TERMINAL_OPTIONS)
+      terminal = new Ctor({ ...TERMINAL_OPTIONS, fontSize: fontSizeRef.current })
       fit = new Fit()
       terminal.loadAddon(fit)
       terminal.loadAddon(new WebLinksAddon())
@@ -110,6 +116,7 @@ export function useXterm({ hostRef, queue, onData, onResize, onCopied }: Options
       handlers.current.onResize(target.cols, target.rows)
 
       termRef.current = target
+      refitRef.current = scheduleRefit
       queue.attach((data) => target.write(data))
       target.focus()
 
@@ -130,8 +137,19 @@ export function useXterm({ hostRef, queue, onData, onResize, onCopied }: Options
       queue.detach()
       terminal?.dispose()
       termRef.current = null
+      refitRef.current = null
     }
   }, [hostRef, queue])
+
+  // A different font size changes how many columns and rows fit: the refit
+  // triggers onResize, which tells the remote side.
+  useEffect(() => {
+    fontSizeRef.current = fontSize
+    const terminal = termRef.current
+    if (!terminal || terminal.options.fontSize === fontSize) return
+    terminal.options.fontSize = fontSize
+    refitRef.current?.()
+  }, [fontSize])
 
   return termRef
 }

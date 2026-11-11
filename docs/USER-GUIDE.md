@@ -185,6 +185,8 @@ then `c` to send `Ctrl+C`.
   selection handles work. Select and press **Copy selection**, or **Copy all**.
 - **Paste** sends the clipboard to the terminal.
 - **Kbd** brings the keyboard back if it was dismissed.
+- **A-** and **A+** change the text size. The same buttons are in the top bar
+  on a computer. The choice is remembered in that browser.
 
 The terminal shrinks to stay above the on-screen keyboard and reports the new
 size to the remote machine.
